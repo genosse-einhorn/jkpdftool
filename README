@@ -1,0 +1,13 @@
+jkpdftool
+=========
+
+A tool I have written for myself to prepare a perfect printout of unusual documents.
+
+* Scale to another page size
+* Crop margins
+* Add margins
+* Print two pages per sheet
+* Split and merge PDF files
+
+Your printer driver should be able to handle all of this, but this tool can
+avoid extra dead trees compared to fiddling with the print settings.
