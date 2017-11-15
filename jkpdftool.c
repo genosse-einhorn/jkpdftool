@@ -14,7 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#define _POSIX_C_SOURCE 200809L
+#define  _XOPEN_SOURCE 700
 #include <malloc.h>
 #include <libgen.h>
 #include <poppler.h>
@@ -29,6 +29,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <locale.h>
+#include <math.h>
 
 //////////////////////////////////////
 // Whitespace cropping
@@ -202,10 +203,13 @@ void swap_doubles(double *a, double *b)
 // Formatting and size calculation
 /////////////////////////////////////////
 static void calc_pdf_size(double *out_w, double *out_h, const double target_w, const double target_h,
-                          enum orientation_mode orientation, PopplerPage *page, bool two_per_page)
+                          enum orientation_mode orientation, PopplerPage *page, bool two_per_page, int rotation)
 {
     double page_w, page_h;
     poppler_page_get_size(page, &page_w, &page_h);
+
+    if ((rotation % 180) != 0)
+        swap_doubles(&page_w, &page_h);
 
     if (target_w > 0.0)
         *out_w = target_w;
@@ -237,10 +241,20 @@ static void calc_pdf_size(double *out_w, double *out_h, const double target_w, c
 
 static cairo_matrix_t get_scale_matrix(double paper_w, double paper_h,
                                        double source_w, double source_h,
-                                       double margin, const struct crop_bounds cropbounds)
+                                       double margin, const struct crop_bounds cropbounds,
+                                       int rotation)
 {
     cairo_matrix_t m;
     cairo_matrix_init_identity(&m);
+
+
+    cairo_matrix_translate(&m, paper_w/2, paper_h/2);
+    cairo_matrix_rotate(&m, -rotation/180.0*M_PI);
+
+    if ((rotation % 180) != 0)
+        swap_doubles(&paper_w, &paper_h);
+
+    cairo_matrix_translate(&m, -paper_w/2, -paper_h/2);
 
     double scale_x = (paper_w - 2*margin) / (source_w - cropbounds.left - cropbounds.right);
     double scale_y = (paper_h - 2*margin) / (source_h - cropbounds.top - cropbounds.bottom);
@@ -453,6 +467,7 @@ int main(int argc, char *argv[])
     g_auto(GStrv)     inputfiles    = NULL;
     gboolean          two_per_page  = FALSE;
     gboolean          crop          = FALSE;
+    gint              rotation      = 0;
 
 
     GOptionEntry entries[] = {
@@ -464,6 +479,7 @@ int main(int argc, char *argv[])
         { "orientation", 'l', 0, G_OPTION_ARG_STRING, &orientation, "Output orientation: 'Landscape' or 'Portrait'", NULL },
         { "two-per-sheet", '2', 0, G_OPTION_ARG_NONE, &two_per_page, "Emit two pages per sheet", NULL },
         { "margin", 'm', 0, G_OPTION_ARG_DOUBLE, &margin, "Extra page margin to add (in points)", "MARGIN" },
+        { "rotation", 'r', 0, G_OPTION_ARG_INT, &rotation, "Page rotation in degrees (multiples of 90°)", "ROTATION" },
         { NULL }
     };
     g_option_context_add_main_entries(context, entries, NULL);
@@ -518,6 +534,12 @@ int main(int argc, char *argv[])
     if (paper_orientation == ORIENTATION_MODE_INVALID) {
         fprintf(stderr, "ERROR: Illegal orientation specification '%s'\n", orientation);
         return -1;
+    }
+
+    // Rotation must be multiples of 90 degrees
+    if ((rotation % 90) != 0) {
+        fprintf(stderr, "ERROR: Rotation must be a multiple of 90 degrees.\n");
+        return 1;
     }
 
     g_autoptr(GFile) ofile = NULL;
@@ -580,7 +602,7 @@ int main(int argc, char *argv[])
     // calculate page size and orientation based on the first page
     PopplerPage *firstpage = pages->pdata[0];
     double width, height;
-    calc_pdf_size(&width, &height, paper_w, paper_h, paper_orientation, firstpage, two_per_page);
+    calc_pdf_size(&width, &height, paper_w, paper_h, paper_orientation, firstpage, two_per_page, rotation);
 
     // do cropping
     struct crop_bounds cropbounds = { 0, 0, 0, 0 };
@@ -638,7 +660,7 @@ int main(int argc, char *argv[])
         cairo_rectangle(cr, 0, 0, area_w, area_h);
         cairo_clip(cr);
 
-        cairo_matrix_t m = get_scale_matrix(area_w, area_h, source_w, source_h, margin, cropbounds);
+        cairo_matrix_t m = get_scale_matrix(area_w, area_h, source_w, source_h, margin, cropbounds, rotation);
 
         cairo_transform(cr, &m);
 
