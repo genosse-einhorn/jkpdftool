@@ -530,6 +530,17 @@ int main(int argc, char *argv[])
         return 1;
     } else {
         ofile = g_file_new_for_commandline_arg(outputfile);
+
+        // make sure we don't try to write to an input file
+        for (char **file = inputfiles; *file; ++file) {
+            g_autoptr(GFile) igfile = g_file_new_for_commandline_arg(*file);
+
+            if (g_file_equal(igfile, ofile)) {
+                fprintf(stderr, "ERROR: output file must not be an input file.\n");
+                return 1;
+            }
+        }
+
         ostream = g_file_replace(ofile,
                                  NULL,
                                  FALSE,
