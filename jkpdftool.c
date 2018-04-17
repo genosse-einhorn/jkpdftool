@@ -31,6 +31,19 @@
 #include <locale.h>
 #include <math.h>
 
+
+static inline void cleanup_poppler_doc(PopplerDocument **d)
+{
+    if (d && *d)
+        g_object_unref(*d);
+}
+
+static inline void cleanup_poppler_page(PopplerPage **p)
+{
+    if (p && *p)
+        g_object_unref(*p);
+}
+
 //////////////////////////////////////
 // Whitespace cropping
 //////////////////////////////////////
@@ -463,6 +476,7 @@ int main(int argc, char *argv[])
     g_autofree gchar *papersize     = NULL;
     g_autofree gchar *orientation   = NULL;
     g_autofree gchar *pagespec      = NULL;
+    g_autofree gchar *overlayfile   = NULL;
     double            margin        = 0.0;
     g_auto(GStrv)     inputfiles    = NULL;
     gboolean          two_per_page  = FALSE;
@@ -480,6 +494,7 @@ int main(int argc, char *argv[])
         { "two-per-sheet", '2', 0, G_OPTION_ARG_NONE, &two_per_page, "Emit two pages per sheet", NULL },
         { "margin", 'm', 0, G_OPTION_ARG_DOUBLE, &margin, "Extra page margin to add (in points)", "MARGIN" },
         { "rotation", 'r', 0, G_OPTION_ARG_INT, &rotation, "Page rotation in degrees (multiples of 90°)", "ROTATION" },
+        { "overlay", 0, 0, G_OPTION_ARG_FILENAME, &overlayfile, "PDF to draw over the output", "FILE.pdf" },
         { NULL }
     };
     g_option_context_add_main_entries(context, entries, NULL);
@@ -508,6 +523,11 @@ int main(int argc, char *argv[])
         "\n"
         "Two pages per sheet:\n"
         "   With the '-2' option, two pages are laid out side-by-side.\n"
+        "\n"
+        "Draw another PDF over it:\n"
+        "   Use the --overlay option to specify a PDF that is drawn over the output.\n"
+        "   The overlay will be neither scaled nor cropped, it's your responsibility\n"
+        "   to preprocess it so that it fits nicely.\n"
     );
     g_option_context_set_description(context, "Written by Jonas Kümmerlin <jonas@kuemmerlin.eu>");
 
@@ -540,6 +560,18 @@ int main(int argc, char *argv[])
     if ((rotation % 90) != 0) {
         fprintf(stderr, "ERROR: Rotation must be a multiple of 90 degrees.\n");
         return 1;
+    }
+
+    // Open overlay file
+    __attribute__((cleanup(cleanup_poppler_doc))) PopplerDocument *overlaydocument = NULL;
+    if (overlayfile) {
+        g_autoptr(GFile) overlaygf = g_file_new_for_commandline_arg(overlayfile);
+
+        overlaydocument = poppler_document_new_from_gfile(overlaygf, NULL, NULL, &error);
+        if (!overlaydocument) {
+            fprintf(stderr, "ERROR: poppler fail while opening '%s': %s\n", overlayfile, error->message);
+            return 1;
+        }
     }
 
     g_autoptr(GFile) ofile = NULL;
@@ -669,6 +701,13 @@ int main(int argc, char *argv[])
         cairo_restore(cr);
 
         if ((pageno % 2) == 1 || !two_per_page) {
+            if (overlaydocument && (int)pageno < poppler_document_get_n_pages(overlaydocument)) {
+                __attribute__((cleanup(cleanup_poppler_page)))
+                PopplerPage *overlay = poppler_document_get_page(overlaydocument, (int)pageno);
+
+                poppler_page_render_for_printing(overlay, cr);
+            }
+
             cairo_surface_show_page(surface);
         }
     }
