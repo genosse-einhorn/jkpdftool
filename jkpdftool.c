@@ -30,7 +30,7 @@
 #include <stdbool.h>
 #include <locale.h>
 #include <math.h>
-
+#include <errno.h>
 
 static inline void cleanup_poppler_doc(PopplerDocument **d)
 {
@@ -128,6 +128,17 @@ static struct crop_bounds calc_crop_bounds(PopplerPage *page)
 //////////////////////////////////////
 // Page size and orientation parsing
 //////////////////////////////////////
+#define SIZE_ERROR size_error_quark()
+static GQuark size_error_quark(void)
+{
+    return g_quark_from_static_string("size-parse-error-quark");
+}
+
+enum {
+    SIZE_ERROR_PARSEFAIL,
+    SIZE_ERROR_OUTOFRANGE
+};
+
 enum orientation_mode {
     ORIENTATION_AUTO,
     ORIENTATION_LANDSCAPE,
@@ -135,7 +146,67 @@ enum orientation_mode {
     ORIENTATION_MODE_INVALID = -1
 };
 
-static bool parse_paper_size(double *width, double *height, const char *spec)
+enum size_unit {
+    SIZE_UNIT_PT,
+    SIZE_UNIT_MM,
+    SIZE_UNIT_UNSPECIFIED
+};
+
+// unit ::= 'mm' | 'pt' | {}
+static size_t parse_unit(const char *str, size_t i, enum size_unit *unit)
+{
+    if (str[i] == 'm' && str[i+1] == 'm') {
+        *unit = SIZE_UNIT_MM;
+        return 2;
+    } else if (str[i] == 'p' && str[i+1] == 't') {
+        *unit = SIZE_UNIT_PT;
+        return 2;
+    } else {
+        *unit = SIZE_UNIT_UNSPECIFIED;
+        return 0;
+    }
+}
+
+static double size_in_pt(double size, enum size_unit unit)
+{
+    switch (unit) {
+        case SIZE_UNIT_MM:
+            return size / 25.4 * 72;
+        default:
+            return size;
+    }
+}
+
+static size_t parse_floatval(const char *str, size_t i, double *out, GError **error)
+{
+    char *endptr = NULL;
+
+    double r = g_strtod(&str[i], &endptr);
+    if (endptr == &str[i]) {
+        g_set_error(error, SIZE_ERROR, SIZE_ERROR_PARSEFAIL, "Invalid number at position %zu", i);
+        return 0;
+    }
+
+    if (!isfinite(r) || errno == ERANGE) {
+        g_set_error(error, SIZE_ERROR, SIZE_ERROR_OUTOFRANGE, "Number at position %zu is out of range", i);
+        return 0;
+    }
+
+    *out = r;
+    return (size_t)(endptr - &str[i]);
+}
+
+static size_t parse_floatval_with_unit(const char *str, size_t i, double *out, enum size_unit *unit, GError **error)
+{
+    size_t floatsize = parse_floatval(str, i, out, error);
+    if (floatsize == 0)
+        return 0;
+
+    size_t unitsize = parse_unit(str, i + floatsize, unit);
+    return floatsize + unitsize;
+}
+
+static bool parse_paper_size(double *width, double *height, const char *spec, GError **error)
 {
     if (!g_ascii_strcasecmp(spec, "a5")) {
         *width = 420.0;
@@ -159,35 +230,47 @@ static bool parse_paper_size(double *width, double *height, const char *spec)
     // FIXME: floating point inaccuracies
     *width = 0.0;
     *height = 0.0;
-    for (;;) {
-        switch (*spec) {
-            case '0': case '1': case '2': case '3': case '4':
-            case '5': case '6': case '7': case '8': case '9':
-                *width = *width * 10 + (*spec++ - '0');
-                break;
-            case 'x': case 'X':
-                spec++;
-                goto parse_height;
-            default:
-                return false;
-        }
-    }
-parse_height:
-    for (;;) {
-        switch (*spec) {
-            case '0': case '1': case '2': case '3': case '4':
-            case '5': case '6': case '7': case '8': case '9':
-                *height = *height * 10 + (*spec++ - '0');
-                break;
-            case 0:
-                goto finished_parsing;
-            default:
-                return false;
-        }
-    }
-finished_parsing:
 
-    return (*width > 0) && (*height > 0);
+    enum size_unit widthunit, heightunit;
+    double rawwidth, rawheight;
+
+    size_t widthsize = parse_floatval_with_unit(spec, 0, &rawwidth, &widthunit, error);
+    if (widthsize == 0)
+        return false;
+
+    if (spec[widthsize] != 'x' && spec[widthsize] != 'X') {
+        g_set_error(error, SIZE_ERROR, SIZE_ERROR_PARSEFAIL, "Unexpected character '%c' at position %zu",
+                    (int)spec[widthsize], widthsize);
+        return false;
+    }
+
+    size_t heightsize = parse_floatval_with_unit(spec, widthsize + 1, &rawheight, &heightunit, error);
+    if (heightsize == 0)
+        return false;
+
+    if (spec[widthsize + heightsize + 1]) {
+        g_set_error(error, SIZE_ERROR, SIZE_ERROR_PARSEFAIL, "Unexpected character '%c' at position %zu",
+                    (int)spec[widthsize + heightsize + 1], widthsize + heightsize + 1);
+        return false;
+    }
+
+    if (widthunit == SIZE_UNIT_UNSPECIFIED)
+        widthunit = heightunit;
+
+    *width = size_in_pt(rawwidth, widthunit);
+    *height = size_in_pt(rawheight, heightunit);
+
+    if (*width <= 0.0) {
+        g_set_error(error, SIZE_ERROR, SIZE_ERROR_OUTOFRANGE, "Width must be greater than zero");
+        return false;
+    }
+
+    if (*height <= 0.0) {
+        g_set_error(error, SIZE_ERROR, SIZE_ERROR_OUTOFRANGE, "Height must be greater than zero");
+        return false;
+    }
+
+    return true;
 }
 
 static enum orientation_mode parse_orientation(const char *orientation)
@@ -544,8 +627,8 @@ int main(int argc, char *argv[])
     double paper_w = 0.0;
     double paper_h = 0.0;
     if (papersize) {
-        if (!parse_paper_size(&paper_w, &paper_h, papersize)) {
-            fprintf(stderr, "ERROR: Illegal paper size specification '%s'\n", papersize);
+        if (!parse_paper_size(&paper_w, &paper_h, papersize, &error)) {
+            fprintf(stderr, "ERROR: Illegal paper size specification '%s': %s\n", papersize, error->message);
             return 1;
         }
     }
