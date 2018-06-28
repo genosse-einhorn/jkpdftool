@@ -1,2 +1,5 @@
 jkpdftool
 jkpdftool.exe
+*.gcda
+*.gcno
+test-tmp

@@ -796,19 +796,19 @@ int main(int argc, char *argv[])
     }
 
     status = cairo_status(cr);
-    if (status)
-        fprintf(stderr, "??? cairo: %s\n", cairo_status_to_string(status));
+    if (status) //LCOV_EXCL_BR_LINE
+        fprintf(stderr, "??? cairo: %s\n", cairo_status_to_string(status)); //LCOV_EXCL_LINE
 
     cairo_destroy(cr);
     cairo_surface_finish(surface);
     status = cairo_surface_status(surface);
-    if (status)
-        fprintf(stderr, "??? cairo: %s\n", cairo_status_to_string(status));
+    if (status) //LCOV_EXCL_BR_LINE
+        fprintf(stderr, "??? cairo: %s\n", cairo_status_to_string(status)); //LCOV_EXCL_LINE
     cairo_surface_destroy(surface);
 
-    if (!g_output_stream_close(G_OUTPUT_STREAM(ostream), NULL, &error)) {
-        fprintf(stderr, "ERROR: Failed to close stream: %s\n", error->message);
-        return 1;
+    if (!g_output_stream_close(G_OUTPUT_STREAM(ostream), NULL, &error)) { //LCOV_EXCL_BR_LINE
+        fprintf(stderr, "ERROR: Failed to close stream: %s\n", error->message); //LCOV_EXCL_LINE
+        return 1; //LCOV_EXCL_LINE
     }
 
     return 0;
