@@ -1,0 +1,36 @@
+jkpdftool
+=========
+
+A set of tools I have written for myself to prepare a perfect printout 
+of annoying documents. The following tools are provided:
+
+  jkpdftool-crop          Remove margins around content
+  jkpdftool-nup           N-up content, i.e. multiple pages on one sheet
+  jkpdftool-pagefit       Fit content into a given page size
+  jkpdftool-rotate        Rotate content
+  jkpdftool-splice        Split and merge pages from multiple files
+
+All tools read from stdin and write the result to stdout. This means you 
+can chain them to perform complex tasks. 
+
+Usage Example
+-------------
+
+Crop margins, fit into A5 and the double up onto one A4 page:
+
+  <IN.pdf jkpdftool-crop | jkpdftool-pagefit -s A5 | jkpdftool-nup 2x1 >OUT.pdf
+
+
+Dependencies
+------------
+
+* GLib    (https://wiki.gnome.org/Projects/GLib)
+* poppler (https://poppler.freedesktop.org/)
+* cairo   (https://cairographics.org/)
+
+Any recent versions shipped with your favorite linux distro should be fine.
+
+You also need a C11 compiler. Development uses gcc, but clang should work, too.
+
+
+
