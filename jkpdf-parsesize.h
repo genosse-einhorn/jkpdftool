@@ -121,6 +121,24 @@ jkpdf_parse_floatval_with_unit(const char *str, size_t i, double *out, enum Jkpd
     return floatsize + unitsize;
 }
 
+static inline bool
+jkpdf_parse_single_length(const char *str, double *out_pt, GError **error)
+{
+    double val = 0.0;
+    enum JkpdfSizeUnit unit = JKPDF_SIZE_UNIT_UNSPECIFIED;
+    size_t s = jkpdf_parse_floatval_with_unit(str, 0, &val, &unit, error);
+    if (s == 0)
+        return false;
+
+    if (str[s] != 0) {
+        jkpdf_set_unexpected_char_error(error, JKPDF_SIZE_ERROR, JKPDF_SIZE_ERROR_PARSEFAIL, str[s], s);
+        return false;
+    }
+
+    *out_pt = jkpdf_size_in_pt(val, unit);
+    return true;
+}
+
 // papersize ::= float [unit] 'x' float [unit]
 static inline bool
 jkpdf_parse_paper_size(double *width, double *height, const char *spec, GError **error)
