@@ -27,7 +27,7 @@ print_help(const char *argv0)
     printf("Transform the PDF file read from stdin to a n-up'ed PDF file written to stdout.\n");
     printf("\n");
     printf("To 'n-up' a PDF means to arrange multiple input pages on one output page for\n");
-    printf("more economical printing. For example, calling 'jkpdf-nup 3x2' will arrange\n");
+    printf("more economical printing. For example, calling 'jkpdftool-nup 3x2' will arrange\n");
     printf("six input pages in a 3x2 grid on the output page. The output page will be\n");
     printf("three times as wide and two times as high as the first input page.\n");
     printf("\n");
@@ -52,7 +52,7 @@ main(int argc, char **argv)
     if (argc >= 2 && argv[1][0]) {
         g_autoptr(GError) error = NULL;
         if (!jkpdf_parse_integral_size(argv[1], &arg_cols, &arg_rows, &error)) {
-            fprintf(stderr, "ERROR: Invalid n-up specification '%s': %s\n", argv[1], error->message);
+            fprintf(stderr, "ERROR: invalid n-up specification '%s': %s\n", argv[1], error->message);
             return 1;
         }
     }
