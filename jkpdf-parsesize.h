@@ -273,9 +273,9 @@ jkpdf_parse_margin_spec(const char *spec, double margins[4], GError **error)
     if (units[2] == JKPDF_SIZE_UNIT_UNSPECIFIED)
         units[2] = units[3];
     if (units[1] == JKPDF_SIZE_UNIT_UNSPECIFIED)
-        units[1] = units[3];
+        units[1] = units[2];
     if (units[0] == JKPDF_SIZE_UNIT_UNSPECIFIED)
-        units[0] = units[3];
+        units[0] = units[1];
 
     for (int j = 0; j < 4; ++j)
         margins[j] = jkpdf_size_in_pt(margins[j], units[j]);
