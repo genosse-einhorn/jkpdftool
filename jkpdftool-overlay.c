@@ -71,7 +71,7 @@ int main(int argc, char **argv)
         { NULL }
     };
 
-    g_autoptr(GOptionContext) context = g_option_context_new("[OVERLAY...] <INPUT >OUTPUT");
+    g_autoptr(GOptionContext) context = g_option_context_new("OVERLAY... <INPUT >OUTPUT");
     g_option_context_add_main_entries(context, option_entries, NULL);
 
     g_option_context_set_description(context, "Overlay PDF files onto another");
@@ -87,6 +87,11 @@ int main(int argc, char **argv)
             fprintf(stderr, "ERROR: invalid offset '%s': %s\n", arg_offset, error->message);
             return 1;
         }
+    }
+
+    if (!arg_overlays) {
+        fprintf(stderr, "ERROR: expected at least one overlay file\n");
+        return 1;
     }
 
     // create inputs and output
