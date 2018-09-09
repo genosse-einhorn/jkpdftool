@@ -55,6 +55,38 @@ rasterize(cairo_surface_t **psurf, PopplerPage *page, double dpi)
     cairo_scale(cr, imgwidth/pagewidth, imgheight/pageheight);
     poppler_page_render_for_printing(page, cr);
     cairo_restore(cr);
+
+    cairo_surface_flush(*psurf);
+
+    // TRANSPARENCY HACK
+    int imgstride = cairo_image_surface_get_stride(*psurf);
+    unsigned char *imgdata = cairo_image_surface_get_data(*psurf);
+
+    for (int y = 0; y < imgheight; ++y) {
+        for (int x = 0; x < imgwidth; ++x) {
+            uint32_t p;
+            memcpy(&p, &imgdata[y * imgstride + x*4], 4);
+
+            uint8_t a = (uint8_t)((p & 0xff000000) >> 24);
+            uint8_t r = (uint8_t)((p & 0x00ff0000) >> 16);
+            uint8_t g = (uint8_t)((p & 0x0000ff00) >> 8);
+            uint8_t b = (uint8_t)((p & 0x000000ff));
+
+            g_assert(a == 0xff);
+
+            uint8_t whiteness = MIN(r, MIN(g, b));
+            a = (uint8_t)(a - whiteness);
+            r = (uint8_t)(r - whiteness);
+            g = (uint8_t)(g - whiteness);
+            b = (uint8_t)(b - whiteness);
+
+            p = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+
+            memcpy(&imgdata[y * imgstride + x*4], &p, 4);
+        }
+    }
+
+    cairo_surface_mark_dirty(*psurf);
 }
 
 int
