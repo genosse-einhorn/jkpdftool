@@ -89,6 +89,262 @@ rasterize(cairo_surface_t **psurf, PopplerPage *page, double dpi)
     cairo_surface_mark_dirty(*psurf);
 }
 
+static inline bool
+pixel_is_opaque(unsigned char *data, int imgstride, int x, int y)
+{
+    uint32_t p;
+    memcpy(&p, &data[y * imgstride + x * 4], 4);
+
+    return p > 0x00ffffff;
+}
+
+static inline int
+border_left(unsigned char *data, int imgstride, int left, int y, int right)
+{
+    for (int i = 0; i < right-left; ++i) {
+        if (pixel_is_opaque(data, imgstride, left + i, y))
+            return i;
+    }
+
+    return right - left;
+}
+
+static inline int
+border_right(unsigned char *data, int imgstride, int left, int y, int right)
+{
+    for (int i = 0; i < right-left; ++i) {
+        if (pixel_is_opaque(data, imgstride, right - i - 1, y))
+            return i;
+    }
+
+    return right - left;
+}
+
+static inline int
+border_top(unsigned char *data, int imgstride, int top, int x, int bottom)
+{
+    for (int i = 0; i < bottom-top; ++i) {
+        if (pixel_is_opaque(data, imgstride, x, top + i))
+            return i;
+    }
+
+    return bottom - top;
+}
+
+static inline int
+border_bottom(unsigned char *data, int imgstride, int top, int x, int bottom)
+{
+    for (int i = 0; i < bottom-top; ++i) {
+        if (pixel_is_opaque(data, imgstride, x, bottom - i - 1))
+            return i;
+    }
+
+    return bottom - top;
+}
+
+static inline void
+emit_rect(unsigned char *data, int imgstride, int top, int right, int bottom, int left, cairo_t *cr)
+{
+    cairo_save(cr);
+
+    /* DEBUG!
+    cairo_set_source_rgb(cr, 1.0, 0.0, 0.0);
+    cairo_rectangle(cr, left, top, right-left, bottom-top);
+    cairo_stroke(cr);*/
+
+    // copy just this part of the image
+    g_autoptr(JKPdfCairoSurfaceT) copy = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, right-left, bottom-top);
+    int copystride = cairo_image_surface_get_stride(copy);
+    unsigned char *copydata = cairo_image_surface_get_data(copy);
+
+    for (int y = 0; y < bottom - top; ++y) {
+        memcpy(&copydata[y * copystride], &data[(y + top) * imgstride + left * 4], (size_t)(right - left)*4);
+    }
+    cairo_surface_mark_dirty(copy);
+
+    // by setting a content-dependent unique ID, the PDF surface will recognize duplicated images
+    // and embed them only once. For text files with lots of identical glyphs, this will lead
+    // to a dramatically reduced file size.
+    g_autofree gchar *checksum = g_compute_checksum_for_data(G_CHECKSUM_SHA256, copydata, (size_t)((bottom-top)*copystride));
+    gchar *id = g_strdup_printf("jkpdftool-rasterize-surf-%s", checksum);
+    cairo_surface_set_mime_data(copy, CAIRO_MIME_TYPE_UNIQUE_ID, (unsigned char*)id, strlen(id), free, id);
+
+    cairo_translate(cr, left, top);
+    cairo_rectangle(cr, 0, 0, right-left, bottom-top);
+    cairo_set_source_surface(cr, copy, 0, 0);
+    cairo_fill(cr);
+
+    cairo_restore(cr);
+
+    // clear emitted part in original image
+    for (int y = top; y < bottom; ++y) {
+        memset(&data[y * imgstride + 4*left], 0, (size_t)(right - left) * 4);
+    }
+}
+
+static inline void
+find_rec_recurse(unsigned char *data, int imgstride, int top, int right, int bottom, int left, cairo_t *cr)
+{
+    // crop top
+    while (top < bottom) {
+        if (border_left(data, imgstride, left, top, right) != right - left)
+            break;
+
+        top++;
+    }
+
+    if (top == bottom)
+        return;
+
+    // crop bottom
+    while (top < bottom) {
+        if (border_left(data, imgstride, left, bottom-1, right) != right - left)
+            break;
+
+        bottom--;
+    }
+
+    // crop left
+    while (left < right) {
+        if (border_top(data, imgstride, top, left, bottom) != bottom - top)
+            break;
+
+        left++;
+    }
+
+    // crop right
+    while (left < right) {
+        if (border_top(data, imgstride, top, right-1, bottom) != bottom - top)
+            break;
+
+        right--;
+    }
+
+    // if the region was empty, we should have returned after cropping the top
+    g_assert(top < bottom);
+    g_assert(left < right);
+
+    // try to split horizontally
+    for (int y = top; y < bottom; ++y) {
+        if (border_left(data, imgstride, left, y, right) == right - left) {
+            find_rec_recurse(data, imgstride, top, right, y, left, cr);
+            find_rec_recurse(data, imgstride, y, right, bottom, left, cr);
+            return;
+        }
+    }
+
+    // try to split vertically
+    for (int x = left; x < right; ++x) {
+        if (border_top(data, imgstride, top, x, bottom) == bottom - top) {
+            find_rec_recurse(data, imgstride, top, x, bottom, left, cr);
+            find_rec_recurse(data, imgstride, top, right, bottom, x, cr);
+            return;
+        }
+    }
+
+    // then try chopping away at the corners
+    g_autofree int *borders_top    = g_new0(int, right-left);
+    g_autofree int *borders_bottom = g_new0(int, right-left);
+    g_autofree int *borders_left   = g_new0(int, bottom-top);
+    g_autofree int *borders_right  = g_new0(int, bottom-top);
+
+    for (int x = left; x < right; ++x) {
+        borders_top[x-left]    = border_top(data, imgstride, top, x, bottom);
+        borders_bottom[x-left] = border_bottom(data, imgstride, top, x, bottom);
+    }
+    for (int y = top; y < bottom; ++y) {
+        borders_left[y-top]  = border_left(data, imgstride, left, y, right);
+        borders_right[y-top] = border_right(data, imgstride, left, y, right);
+    }
+
+    // top left and right corner
+    for (int x = left + 1; x < right-1; ++x) {
+        int b_self  = borders_top[x-left];
+        int b_left  = borders_top[x-left-1];
+        int b_right = borders_top[x-left+1];
+
+        if (b_self > b_left) {
+            // potentially chop left
+            for (int y = top + b_self - 1; y >= top + b_left; --y) {
+                if (borders_left[y-top] >= x-left) {
+                    find_rec_recurse(data, imgstride, top, x, y, left, cr);
+                    find_rec_recurse(data, imgstride, top, right, bottom, left, cr);
+                    return;
+                }
+            }
+        }
+        if (b_self > b_right) {
+            // potentially chop right
+            for (int y = top + b_self - 1; y >= top + b_right; --y) {
+                if (borders_right[y-top] >= right-x) {
+                    find_rec_recurse(data, imgstride, top, right, y, x, cr);
+                    find_rec_recurse(data, imgstride, top, right, bottom, left, cr);
+                    return;
+                }
+            }
+        }
+    }
+
+    // bottom left and right corner
+    for (int x = left + 1; x < right-1; ++x) {
+        int b_self  = borders_bottom[x-left];
+        int b_left  = borders_bottom[x-left-1];
+        int b_right = borders_bottom[x-left+1];
+
+        if (b_self > b_left) {
+            // potentially chop left
+            for (int y = bottom - b_self - 1; y < bottom - b_left; ++y) {
+                if (borders_left[y-top] >= x-left) {
+                    find_rec_recurse(data, imgstride, y, x, bottom, left, cr);
+                    find_rec_recurse(data, imgstride, top, right, bottom, left, cr);
+                    return;
+                }
+            }
+        }
+        if (b_self > b_right) {
+            // potentially chop right
+            for (int y = bottom - b_self - 1; y < bottom - b_right; ++y) {
+                if (borders_right[y-top] >= right-x) {
+                    find_rec_recurse(data, imgstride, y, right, bottom, x, cr);
+                    find_rec_recurse(data, imgstride, top, right, bottom, left, cr);
+                    return;
+                }
+            }
+        }
+    }
+
+    // no parts to chop -> finished with this rect
+    emit_rect(data, imgstride, top, right, bottom, left, cr);
+}
+
+static inline void
+find_opaque_rects(cairo_surface_t *imgsurf, cairo_t *cr_out)
+{
+    int imgwidth  = cairo_image_surface_get_width(imgsurf);
+    int imgheight = cairo_image_surface_get_height(imgsurf);
+    int imgstride = cairo_image_surface_get_stride(imgsurf);
+    unsigned char *imgdata = cairo_image_surface_get_data(imgsurf);
+
+    find_rec_recurse(imgdata, imgstride, 0, imgwidth, imgheight, 0, cr_out);
+}
+
+static inline cairo_surface_t *
+clone_image_surface(cairo_surface_t *source)
+{
+    int w = cairo_image_surface_get_width(source);
+    int h = cairo_image_surface_get_height(source);
+
+    g_autoptr(JKPdfCairoSurfaceT) result = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    g_autoptr(JKPdfCairoT) cr = cairo_create(result);
+
+    cairo_rectangle(cr, 0, 0, w, h);
+    cairo_set_source_surface(cr, source, 0, 0);
+    cairo_fill(cr);
+
+    cairo_surface_flush(result);
+    return g_steal_pointer(&result);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -138,9 +394,7 @@ main(int argc, char **argv)
 
         cairo_scale(cr, pagewidth/imgwidth, pageheight/imgheight);
 
-        cairo_rectangle(cr, 0, 0, imgwidth, imgheight);
-        cairo_set_source_surface(cr, imgsurf, 0, 0);
-        cairo_fill(cr);
+        find_opaque_rects(imgsurf, cr);
 
         cairo_restore(cr);
         cairo_surface_show_page(surf);
