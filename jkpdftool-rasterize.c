@@ -66,7 +66,6 @@ transparentize(cairo_surface_t *surf)
 {
     cairo_surface_flush(surf);
 
-    // TRANSPARENCY HACK
     int imgwidth  = cairo_image_surface_get_width(surf);
     int imgheight = cairo_image_surface_get_height(surf);
     int imgstride = cairo_image_surface_get_stride(surf);
@@ -91,6 +90,37 @@ transparentize(cairo_surface_t *surf)
             b = (uint8_t)(b - whiteness);
 
             p = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+
+            memcpy(&imgdata[y * imgstride + x*4], &p, 4);
+        }
+    }
+
+    cairo_surface_mark_dirty(surf);
+}
+
+static inline void
+make_grayscale(cairo_surface_t *surf)
+{
+    cairo_surface_flush(surf);
+
+    int imgwidth  = cairo_image_surface_get_width(surf);
+    int imgheight = cairo_image_surface_get_height(surf);
+    int imgstride = cairo_image_surface_get_stride(surf);
+    unsigned char *imgdata = cairo_image_surface_get_data(surf);
+
+    for (int y = 0; y < imgheight; ++y) {
+        for (int x = 0; x < imgwidth; ++x) {
+            uint32_t p;
+            memcpy(&p, &imgdata[y * imgstride + x*4], 4);
+
+            uint8_t a = (uint8_t)((p & 0xff000000) >> 24);
+            uint8_t r = (uint8_t)((p & 0x00ff0000) >> 16);
+            uint8_t g = (uint8_t)((p & 0x0000ff00) >> 8);
+            uint8_t b = (uint8_t)((p & 0x000000ff));
+
+            uint8_t luminance = (uint8_t)((MIN(r, MIN(g, b)) + MAX(r, MAX(g, b))) / 2);
+
+            p = ((uint32_t)a << 24) | ((uint32_t)luminance << 16) | ((uint32_t)luminance << 8) | (uint32_t)luminance;
 
             memcpy(&imgdata[y * imgstride + x*4], &p, 4);
         }
@@ -362,12 +392,14 @@ main(int argc, char **argv)
     double   arg_resolution   = 600;
     gboolean arg_chopped      = FALSE;
     gboolean arg_transparency = FALSE;
+    gboolean arg_grayscale    = FALSE;
     gboolean arg_debug        = FALSE;
 
     GOptionEntry option_entries[] = {
         { "resolution",  'r', 0, G_OPTION_ARG_DOUBLE, &arg_resolution, "Resolution to rasterize (default: 600)", "DPI" },
         { "chop",        'c', 0, G_OPTION_ARG_NONE, &arg_chopped, "Chop image into opaque parts. Implies --transparent.", NULL },
         { "transparent", 't', 0, G_OPTION_ARG_NONE, &arg_transparency, "Make white pixels transparent.", NULL },
+        { "grayscale",   'g', 0, G_OPTION_ARG_NONE, &arg_grayscale, "Turn image into grayscale", NULL },
         { "debug",       'd', 0, G_OPTION_ARG_NONE, &arg_debug, "Mark chop regions with red rectangles.", NULL },
         { NULL }
     };
@@ -408,6 +440,9 @@ main(int argc, char **argv)
         poppler_page_get_size(page, &pagewidth, &pageheight);
 
         rasterize(&imgsurf, page, arg_resolution);
+
+        if (arg_grayscale)
+            make_grayscale(imgsurf);
 
         if (arg_transparency)
             transparentize(imgsurf);
