@@ -19,6 +19,8 @@
 #include <inttypes.h>
 #include <limits.h>
 
+static bool DEBUG_MODE = false;
+
 static inline void
 rasterize(cairo_surface_t **psurf, PopplerPage *page, double dpi)
 {
@@ -57,10 +59,18 @@ rasterize(cairo_surface_t **psurf, PopplerPage *page, double dpi)
     cairo_restore(cr);
 
     cairo_surface_flush(*psurf);
+}
+
+static inline void
+transparentize(cairo_surface_t *surf)
+{
+    cairo_surface_flush(surf);
 
     // TRANSPARENCY HACK
-    int imgstride = cairo_image_surface_get_stride(*psurf);
-    unsigned char *imgdata = cairo_image_surface_get_data(*psurf);
+    int imgwidth  = cairo_image_surface_get_width(surf);
+    int imgheight = cairo_image_surface_get_height(surf);
+    int imgstride = cairo_image_surface_get_stride(surf);
+    unsigned char *imgdata = cairo_image_surface_get_data(surf);
 
     for (int y = 0; y < imgheight; ++y) {
         for (int x = 0; x < imgwidth; ++x) {
@@ -86,7 +96,7 @@ rasterize(cairo_surface_t **psurf, PopplerPage *page, double dpi)
         }
     }
 
-    cairo_surface_mark_dirty(*psurf);
+    cairo_surface_mark_dirty(surf);
 }
 
 static inline bool
@@ -147,10 +157,11 @@ emit_rect(unsigned char *data, int imgstride, int top, int right, int bottom, in
 {
     cairo_save(cr);
 
-    /* DEBUG!
-    cairo_set_source_rgb(cr, 1.0, 0.0, 0.0);
-    cairo_rectangle(cr, left, top, right-left, bottom-top);
-    cairo_stroke(cr);*/
+    if (DEBUG_MODE) {
+        cairo_set_source_rgb(cr, 1.0, 0.0, 0.0);
+        cairo_rectangle(cr, left, top, right-left, bottom-top);
+        cairo_stroke(cr);
+    }
 
     // copy just this part of the image
     g_autoptr(JKPdfCairoSurfaceT) copy = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, right-left, bottom-top);
@@ -318,7 +329,7 @@ find_rec_recurse(unsigned char *data, int imgstride, int top, int right, int bot
 }
 
 static inline void
-find_opaque_rects(cairo_surface_t *imgsurf, cairo_t *cr_out)
+paint_chopped(cairo_surface_t *imgsurf, cairo_t *cr_out)
 {
     int imgwidth  = cairo_image_surface_get_width(imgsurf);
     int imgheight = cairo_image_surface_get_height(imgsurf);
@@ -348,10 +359,16 @@ clone_image_surface(cairo_surface_t *source)
 int
 main(int argc, char **argv)
 {
-    double arg_resolution = 600;
+    double   arg_resolution   = 600;
+    gboolean arg_chopped      = FALSE;
+    gboolean arg_transparency = FALSE;
+    gboolean arg_debug        = FALSE;
 
     GOptionEntry option_entries[] = {
-        { "resolution",       'r', 0, G_OPTION_ARG_DOUBLE, &arg_resolution, "Resolution to rasterize (default: 600)", "DPI" },
+        { "resolution",  'r', 0, G_OPTION_ARG_DOUBLE, &arg_resolution, "Resolution to rasterize (default: 600)", "DPI" },
+        { "chop",        'c', 0, G_OPTION_ARG_NONE, &arg_chopped, "Chop image into opaque parts. Implies --transparent.", NULL },
+        { "transparent", 't', 0, G_OPTION_ARG_NONE, &arg_transparency, "Make white pixels transparent.", NULL },
+        { "debug",       'd', 0, G_OPTION_ARG_NONE, &arg_debug, "Mark chop regions with red rectangles.", NULL },
         { NULL }
     };
 
@@ -371,6 +388,12 @@ main(int argc, char **argv)
         return 1;
     }
 
+    if (arg_debug)
+        DEBUG_MODE = true;
+
+    if (arg_chopped)
+        arg_transparency = TRUE;
+
     g_autoptr(JKPdfPopplerDocument) doc = jkpdf_create_poppler_document_for_stdin();
     g_autoptr(JKPdfCairoSurfaceT) surf = jkpdf_create_surface_for_stdout();
 
@@ -386,6 +409,9 @@ main(int argc, char **argv)
 
         rasterize(&imgsurf, page, arg_resolution);
 
+        if (arg_transparency)
+            transparentize(imgsurf);
+
         cairo_save(cr);
         cairo_pdf_surface_set_size(surf, pagewidth, pageheight);
 
@@ -394,7 +420,13 @@ main(int argc, char **argv)
 
         cairo_scale(cr, pagewidth/imgwidth, pageheight/imgheight);
 
-        find_opaque_rects(imgsurf, cr);
+        if (arg_chopped) {
+            paint_chopped(imgsurf, cr);
+        } else {
+            cairo_set_source_surface(cr, imgsurf, 0, 0);
+            cairo_rectangle(cr, 0, 0, imgwidth, imgheight);
+            cairo_fill(cr);
+        }
 
         cairo_restore(cr);
         cairo_surface_show_page(surf);
