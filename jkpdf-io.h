@@ -65,14 +65,24 @@ jkpdf_create_surface_for_stdout(void)
     return cairo_pdf_surface_create_for_stream(_jkpdf_cairo_write_to_stdout, NULL, 100, 100);
 }
 
+static inline void
+_jkpdf_weak_unref_gbytes(gpointer data, GObject *where_the_object_was)
+{
+    (void)where_the_object_was;
+
+    g_bytes_unref((GBytes*)data);
+}
+
 static inline PopplerDocument *
 jkpdf_create_poppler_document_from_bytes(GBytes *bytes)
 {
-    g_autoptr(GInputStream) mis = g_memory_input_stream_new_from_bytes(bytes);
+    g_autoptr(GBytes) data = g_bytes_ref(bytes);
     g_autoptr(GError) error = NULL;
-    g_autoptr(JKPdfPopplerDocument) doc = poppler_document_new_from_stream(mis, -1, NULL, NULL, &error);
+    g_autoptr(JKPdfPopplerDocument) doc = poppler_document_new_from_data((char*)g_bytes_get_data(data, NULL),
+                                                                         (int)g_bytes_get_size(data),
+                                                                         NULL, &error);
     if (!doc) {
-        fprintf(stderr, "ERROR: could not open stdin: %s\n", error->message);
+        fprintf(stderr, "ERROR: could not open PDF: %s\n", error->message);
         exit(1);
     }
 
@@ -81,6 +91,8 @@ jkpdf_create_poppler_document_from_bytes(GBytes *bytes)
         exit(1);
     }
 
+    g_object_weak_ref(G_OBJECT(doc), _jkpdf_weak_unref_gbytes, data);
+    data = NULL;
     return g_steal_pointer(&doc);
 }
 
