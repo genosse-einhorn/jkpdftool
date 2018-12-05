@@ -102,13 +102,7 @@ int main(int argc, char **argv)
     g_autoptr(GPtrArray) docarr = g_ptr_array_new_full(overlay_count + 1, g_object_unref);
     g_ptr_array_add(docarr, g_object_ref(main_doc));
     for (unsigned i = 0; i < overlay_count; ++i) {
-        // FIXME! won't work for pipe input
-        g_autoptr(GFile) file = g_file_new_for_commandline_arg(arg_overlays[i]);
-        PopplerDocument *doc = poppler_document_new_from_gfile(file, NULL, NULL, &error);
-        if (!doc) {
-            fprintf(stderr, "ERROR: while opening '%s': %s\n", arg_overlays[i], error->message);
-            return 1;
-        }
+        PopplerDocument *doc = jkpdf_create_poppler_document_for_commandline_arg(arg_overlays[i]);
 
         g_ptr_array_add(docarr, doc);
     }

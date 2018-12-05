@@ -19,6 +19,7 @@
 #include <cairo.h>
 #include <cairo-pdf.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -97,17 +98,9 @@ jkpdf_create_poppler_document_from_bytes(GBytes *bytes)
 }
 
 static inline PopplerDocument *
-jkpdf_create_poppler_document_for_stdin(void)
+jkpdf_create_poppler_document_for_fd(int fd)
 {
-    if (isatty(0)) {
-        fprintf(stderr, "ERROR: refusing to read PDF from terminal\n");
-        exit(1);
-    } else if (errno == EBADF) {
-        fprintf(stderr, "WTF: stdin is not a valid file descriptor\n");
-        exit(1);
-    }
-
-    g_autoptr(GMappedFile) map = g_mapped_file_new_from_fd(0, FALSE, NULL);
+    g_autoptr(GMappedFile) map = g_mapped_file_new_from_fd(fd, FALSE, NULL);
     if (map) {
         // regular file we can randomly access
         g_autoptr(GBytes) bytes = g_mapped_file_get_bytes(map);
@@ -118,14 +111,56 @@ jkpdf_create_poppler_document_for_stdin(void)
 
         guint8 buf[2048];
         ssize_t count = 0;
-        while ((count = read(0, buf, sizeof(buf))) > 0) {
+        while ((count = read(fd, buf, sizeof(buf))) > 0) {
             g_byte_array_append(arr, buf, (guint)count);
         }
         if (count < 0) {
-            perror("ERROR: while read(2)'ing from stdin");
+            perror("ERROR: while read(2)'ing input file");
             exit(1);
         }
 
         return jkpdf_create_poppler_document_from_bytes(g_byte_array_free_to_bytes(arr));
     }
+}
+
+static inline PopplerDocument *
+jkpdf_create_poppler_document_for_stdin(void)
+{
+    if (isatty(0)) {
+        fprintf(stderr, "ERROR: refusing to read PDF from terminal\n");
+        exit(1);
+    } else if (errno == EBADF) {
+        fprintf(stderr, "WTF: stdin is not a valid file descriptor\n");
+        exit(1);
+    }
+
+    return jkpdf_create_poppler_document_for_fd(0);
+}
+
+static inline void
+_jkpdf_weak_close_fd(gpointer data, GObject *where_the_object_was)
+{
+    (void)where_the_object_was;
+
+    close(GPOINTER_TO_INT(data));
+}
+
+
+static inline PopplerDocument *
+jkpdf_create_poppler_document_for_commandline_arg(const char *arg)
+{
+    int fd = open(arg, O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "ERROR: while opening '%s': %s", arg, strerror(errno));
+        exit(1);
+    }
+
+    PopplerDocument *doc = jkpdf_create_poppler_document_for_fd(fd);
+    if (doc) {
+        g_object_weak_ref(G_OBJECT(doc), _jkpdf_weak_close_fd, GINT_TO_POINTER(fd));
+    } else {
+        close(fd);
+    }
+
+    return doc;
 }

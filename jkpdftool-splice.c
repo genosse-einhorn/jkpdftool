@@ -39,7 +39,7 @@ document_collection_free(DocumentCollection *coll)
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(DocumentCollection, document_collection_free)
 
 static DocumentCollection *
-document_collection_new_from_filelist(GStrv filenames, GError **error)
+document_collection_new_from_filelist(GStrv filenames)
 {
     unsigned count = g_strv_length(filenames);
 
@@ -49,13 +49,7 @@ document_collection_new_from_filelist(GStrv filenames, GError **error)
     coll->total_page_count = 0;
 
     for (unsigned i = 0; i < count; ++i) {
-        g_autoptr(GFile) file = g_file_new_for_commandline_arg(filenames[i]);
-        coll->documents[i].doc = poppler_document_new_from_gfile(file, NULL, NULL, error);
-        if (!coll->documents[i].doc) {
-            g_prefix_error(error, "While opening '%s': ", filenames[i]);
-            return NULL;
-        }
-
+        coll->documents[i].doc = jkpdf_create_poppler_document_for_commandline_arg(filenames[i]);
         coll->documents[i].start_page = coll->total_page_count;
         coll->total_page_count += poppler_document_get_n_pages(coll->documents[i].doc);
         coll->documents[i].end_page = coll->total_page_count;
@@ -255,11 +249,7 @@ int main(int argc, char **argv)
 
     g_autoptr(DocumentCollection) coll = NULL;
     if (arg_inputs && *arg_inputs) {
-        coll = document_collection_new_from_filelist(arg_inputs, &error);
-        if (!coll) {
-            fprintf(stderr, "ERROR: %s\n", error->message);
-            return 1;
-        }
+        coll = document_collection_new_from_filelist(arg_inputs);
     } else {
         coll = document_collection_new_from_one_doc(jkpdf_create_poppler_document_for_stdin());
     }
