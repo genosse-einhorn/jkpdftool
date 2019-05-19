@@ -14,6 +14,7 @@
 
 #include "jkpdf-io.h"
 #include "jkpdf-transform.h"
+#include "jkpdf-parsesize.h"
 
 #include <stdbool.h>
 #include <inttypes.h>
@@ -72,8 +73,23 @@ struct crop_bounds {
     double bottom;
 };
 
+static inline bool color_equal_with_fuzz(const void *a, const void *b, int fuzz) {
+    unsigned char rgba[4];
+    unsigned char rgbb[4];
+
+    memcpy(rgba, a, 4);
+    memcpy(rgbb, b, 4);
+
+    for (int i = 0; i < 4; ++i) {
+        if (abs((int)rgba[i] - (int)rgbb[i]) > fuzz)
+            return false;
+    }
+
+    return true;
+}
+
 static inline struct crop_bounds
-calc_crop_bounds(PopplerPage *page, double dpi, float bg_r, float bg_g, float bg_b)
+calc_crop_bounds(PopplerPage *page, double dpi, int pxl_limit, int color_fuzz, float bg_r, float bg_g, float bg_b)
 {
     struct crop_bounds retval = { 0.0, 0.0, 0.0, 0.0 };
 
@@ -100,46 +116,91 @@ calc_crop_bounds(PopplerPage *page, double dpi, float bg_r, float bg_g, float bg
     int stride = cairo_image_surface_get_stride(img);
     unsigned char *data = cairo_image_surface_get_data(img);
 
-    int min_left = INT_MAX, min_right  = INT_MAX;
-    int min_top  = INT_MAX, min_bottom = INT_MAX;
+    // top
+    int min_top = 0;
     for (int y = 0; y < surfheight; ++y) {
         unsigned char *row = data + y * stride;
 
-        int left = INT_MAX, right = INT_MAX;
-
+        int num_mismatch = 0;
         for (int x = 0; x < surfwidth; ++x) {
-            if (memcmp(&row[4*x], &bgcolor, 4)) {
-                left = MIN(left, x);
-                right = MIN(surfwidth - 1 - x, right);
-            }
+            if (!color_equal_with_fuzz(&row[4*x], &bgcolor, color_fuzz))
+                num_mismatch++;
         }
 
-        min_left = MIN(left, min_left);
-        min_right = MIN(right, min_right);
+        if (num_mismatch > pxl_limit)
+            break;
 
-        if (left != INT_MAX || right != INT_MAX) {
-            min_top = MIN(min_top, y);
-            min_bottom = MIN(min_bottom, surfheight - 1 - y);
-        }
+        min_top++;
     }
 
-    retval.left   = min_left   == INT_MAX ? 0 : (double)min_left   * (pagewidth / surfwidth);
-    retval.right  = min_right  == INT_MAX ? 0 : (double)min_right  * (pagewidth / surfwidth);
-    retval.top    = min_top    == INT_MAX ? 0 : (double)min_top    * (pageheight / surfheight);
-    retval.bottom = min_bottom == INT_MAX ? 0 : (double)min_bottom * (pageheight / surfheight);
+    // bottom
+    int min_bottom = 0;
+    for (int y = surfheight-1; y >= min_top; --y) {
+        unsigned char *row = data + y * stride;
+
+        int num_mismatch = 0;
+        for (int x = 0; x < surfwidth; ++x) {
+            if (!color_equal_with_fuzz(&row[4*x], &bgcolor, color_fuzz))
+                num_mismatch++;
+        }
+
+        if (num_mismatch > pxl_limit)
+            break;
+
+        min_bottom++;
+    }
+
+    // left
+    int min_left = 0;
+    for (int x = 0; x < surfwidth; ++x) {
+        int num_mismatch = 0;
+
+        for (int y = 0; y < surfheight; ++y) {
+            unsigned char *row = data + y * stride;
+            if (!color_equal_with_fuzz(&row[4*x], &bgcolor, color_fuzz))
+                num_mismatch++;
+        }
+
+        if (num_mismatch > pxl_limit)
+            break;
+
+        min_left++;
+    }
+
+    // right
+    int min_right = 0;
+    for (int x = surfwidth-1; x > min_left; --x) {
+        int num_mismatch = 0;
+
+        for (int y = 0; y < surfheight; ++y) {
+            unsigned char *row = data + y * stride;
+            if (!color_equal_with_fuzz(&row[4*x], &bgcolor, color_fuzz))
+                num_mismatch++;
+        }
+
+        if (num_mismatch > pxl_limit)
+            break;
+
+        min_right++;
+    }
+
+    retval.left   = (double)min_left   * (pagewidth / surfwidth);
+    retval.right  = (double)min_right  * (pagewidth / surfwidth);
+    retval.top    = (double)min_top    * (pageheight / surfheight);
+    retval.bottom = (double)min_bottom * (pageheight / surfheight);
 
     return retval;
 }
 
 static inline struct crop_bounds
-calc_crop_bounds_for_all(PopplerDocument *doc, double dpi, float bg_r, float bg_g, float bg_b)
+calc_crop_bounds_for_all(PopplerDocument *doc, double dpi, int pxl_limit, int color_fuzz, float bg_r, float bg_g, float bg_b)
 {
     struct crop_bounds retval = { INFINITY, INFINITY, INFINITY, INFINITY };
 
     for (int i = 0; i < poppler_document_get_n_pages(doc); ++i) {
         g_autoptr(JKPdfPopplerPage) page = poppler_document_get_page(doc, i);
 
-        struct crop_bounds b = calc_crop_bounds(page, dpi, bg_r, bg_b, bg_g);
+        struct crop_bounds b = calc_crop_bounds(page, dpi, pxl_limit, color_fuzz, bg_r, bg_b, bg_g);
 
         retval.left   = MIN(retval.left, b.left);
         retval.right  = MIN(retval.right, b.right);
@@ -156,11 +217,25 @@ main(int argc, char **argv)
     g_autofree gchar *arg_bgcolor = NULL;
     double arg_resolution = 72;
     gboolean arg_per_page = FALSE;
+    int arg_pxl_limit = 0;
+    gboolean arg_no_top = FALSE;
+    gboolean arg_no_bottom = FALSE;
+    gboolean arg_no_left = FALSE;
+    gboolean arg_no_right = FALSE;
+    g_autofree gchar *arg_margin = NULL;
+    int arg_color_fuzz = 0;
 
     GOptionEntry option_entries[] = {
         { "background-color", 'c', 0, G_OPTION_ARG_STRING, &arg_bgcolor,    "Background color to crop (default: white)", "RRGGBB" },
         { "resolution",       'r', 0, G_OPTION_ARG_DOUBLE, &arg_resolution, "Resolution to detect content (default: 72)", "DPI" },
         { "per-page",         'p', 0, G_OPTION_ARG_NONE,   &arg_per_page,   "Calculate offsets per page (default: no)", NULL },
+        { "allow-mismatch",   'l', 0, G_OPTION_ARG_INT,    &arg_pxl_limit,  "Tolerated non-background pixels (default: 0)", "NUM" },
+        { "no-top",           0,   0, G_OPTION_ARG_NONE,   &arg_no_top,     "Do not crop the top side", NULL },
+        { "no-bottom",        0,   0, G_OPTION_ARG_NONE,   &arg_no_bottom,  "Do not crop the bottom side", NULL },
+        { "no-left",          0,   0, G_OPTION_ARG_NONE,   &arg_no_left,    "Do not crop the left side", NULL },
+        { "no-right",         0,   0, G_OPTION_ARG_NONE,   &arg_no_right,   "Do not crop the right side", NULL },
+        { "margin",           'm', 0, G_OPTION_ARG_STRING, &arg_margin,     "Margin to leave around detected content", "MARGIN" },
+        { "fuzz",             'f', 0, G_OPTION_ARG_INT,    &arg_color_fuzz, "Allowed color variation (default: 0)", "0-255" },
         { NULL }
     };
 
@@ -187,6 +262,15 @@ main(int argc, char **argv)
         "  cropped individually. With per page cropping, pages will end up having\n"
         "  different sizes.\n"
         "\n"
+        "Fuzzy content detection:\n"
+        "  The --fuzz option allows you to specify how closely a color needs to match\n"
+        "  to be considered part of the background. This is useful when cropping\n"
+        "  compressed images where color representation might not always be exact.\n"
+        "  The --allow-mismatch option specifies the number of pixels per row or\n"
+        "  column which can be of non-background color while still considering the\n"
+        "  row or column empty. This is useful for ignoring tiny dust particles\n"
+        "  on scanned images.\n"
+        "\n"
     );
 
     if (!g_option_context_parse(context, &argc, &argv, &error)) {
@@ -207,11 +291,17 @@ main(int argc, char **argv)
         return 1;
     }
 
+    double margins[4] = { 0.0, 0.0, 0.0, 0.0 };
+    if (arg_margin && !jkpdf_parse_margin_spec(arg_margin, margins, &error)) {
+        fprintf(stderr, "ERROR: invalid margin specification '%s': %s\n", arg_margin, error->message);
+        return 1;
+    }
+
     g_autoptr(JKPdfPopplerDocument) doc = jkpdf_create_poppler_document_for_stdin();
     g_autoptr(JKPdfCairoSurfaceT) surf = jkpdf_create_surface_for_stdout();
 
     if (!arg_per_page) {
-        global_bounds = calc_crop_bounds_for_all(doc, arg_resolution, r, g, b);
+        global_bounds = calc_crop_bounds_for_all(doc, arg_resolution, arg_pxl_limit, arg_color_fuzz, r, g, b);
     }
 
     g_autoptr(JKPdfCairoT) cr = cairo_create(surf);
@@ -224,10 +314,24 @@ main(int argc, char **argv)
 
         struct crop_bounds bounds;
         if (arg_per_page) {
-            bounds = calc_crop_bounds(page, arg_resolution, r, g, b);
+            bounds = calc_crop_bounds(page, arg_resolution, arg_pxl_limit, arg_color_fuzz, r, g, b);
         } else {
             bounds = global_bounds;
         }
+
+        bounds.top    = MAX(0.0, bounds.top - margins[0]);
+        bounds.right  = MAX(0.0, bounds.right - margins[1]);
+        bounds.bottom = MAX(0.0, bounds.bottom - margins[2]);
+        bounds.left   = MAX(0.0, bounds.left - margins[3]);
+
+        if (arg_no_left)
+            bounds.left = 0;
+        if (arg_no_top)
+            bounds.top = 0;
+        if (arg_no_right)
+            bounds.right = 0;
+        if (arg_no_bottom)
+            bounds.bottom = 0;
 
         cairo_rectangle_t source = { bounds.left, bounds.top,
             pagewidth - bounds.left - bounds.right, pageheight - bounds.top - bounds.bottom };
