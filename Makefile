@@ -9,7 +9,7 @@ CFLAGS_PKG     != $(PKGCONFIG) --cflags $(PKGS)
 LIBS           := -lm
 LIBS_PKG       != $(PKGCONFIG) --libs $(PKGS)
 
-EXE            := out/jkpdftool-pagefit out/jkpdftool-rotate out/jkpdftool-nup out/jkpdftool-splice out/jkpdftool-crop out/jkpdftool-ndown out/jkpdftool-overlay out/jkpdftool-rasterize out/jkpdftool-reencode
+EXE            := out/jkpdftool-pagefit out/jkpdftool-rotate out/jkpdftool-nup out/jkpdftool-splice out/jkpdftool-crop out/jkpdftool-ndown out/jkpdftool-overlay out/jkpdftool-rasterize out/jkpdftool-reencode out/jkpdftool-pasta
 
 all: $(EXE)
 
