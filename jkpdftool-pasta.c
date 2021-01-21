@@ -1,4 +1,4 @@
-// Copyright © 2019 Jonas Kümmerlin <jonas@kuemmerlin.eu>
+// Copyright © 2021 Jonas Kümmerlin <jonas@kuemmerlin.eu>
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -16,16 +16,184 @@
 #include "jkpdf-parsesize.h"
 #include <stdbool.h>
 
-struct JkpdfPasteSpec {
-    int targetPage;
+// Rendering, via a scene graph-like tree structure
+struct JkpdfPastaNode {
+    void (*render)(cairo_t * /*cr*/, struct JkpdfPastaNode * /*closure*/);
+    double width;
+    double height;
+};
+
+struct JkpdfPastaSourceNode {
+    struct JkpdfPastaNode node;
+    PopplerPage *page;
+};
+
+struct JkpdfPastaDeleteNode {
+    struct JkpdfPastaNode node;
     double x;
     double y;
     double w;
     double h;
-    int sourcePage;
-    double sourceX;
-    double sourceY;
+    struct JkpdfPastaNode *source;
 };
+
+struct JkpdfPastaCopyNode {
+    struct JkpdfPastaNode node;
+    double x;
+    double y;
+    struct JkpdfPastaNode *source;
+};
+
+struct JkpdfPastaPasteNode {
+    struct JkpdfPastaNode node;
+    double x;
+    double y;
+    struct JkpdfPastaNode *source;
+    struct JkpdfPastaNode *clipboard;
+};
+
+static void
+jkpdf_pasta_null_node_render_func(cairo_t *cr, struct JkpdfPastaNode *closure)
+{
+    (void)cr; (void)closure;
+}
+
+static struct JkpdfPastaNode *
+jkpdf_pasta_create_null_node(void)
+{
+    struct JkpdfPastaNode *node = g_new0(struct JkpdfPastaNode, 1);
+    node->render = jkpdf_pasta_null_node_render_func;
+    node->width = 0;
+    node->height = 0;
+
+    return node;
+}
+
+
+static void
+jkpdf_pasta_source_node_render_func(cairo_t *cr, struct JkpdfPastaNode *closure)
+{
+    struct JkpdfPastaSourceNode *source = (struct JkpdfPastaSourceNode *)closure;
+
+    cairo_save(cr);
+    cairo_rectangle(cr, 0, 0, source->node.width, source->node.height);
+    cairo_clip(cr);
+    poppler_page_render_for_printing(source->page, cr);
+    cairo_restore(cr);
+}
+
+static struct JkpdfPastaNode *
+jkpdf_pasta_create_source_node(PopplerPage *page)
+{
+    double w = 0, h = 0;
+    poppler_page_get_size(page, &w, &h);
+
+    struct JkpdfPastaSourceNode *node = g_new0(struct JkpdfPastaSourceNode, 1);
+    node->node.render = jkpdf_pasta_source_node_render_func;
+    node->node.width = w;
+    node->node.height = h;
+    node->page = page;
+    return &node->node;
+}
+
+static void
+jkpdf_pasta_delete_node_render_func(cairo_t *cr, struct JkpdfPastaNode *closure)
+{
+    struct JkpdfPastaDeleteNode *node = (struct JkpdfPastaDeleteNode *)closure;
+
+    cairo_save(cr);
+    cairo_new_path(cr);
+    cairo_new_sub_path(cr);
+    cairo_move_to(cr, node->x, node->y);
+    cairo_line_to(cr, node->x + node->w, node->y);
+    cairo_line_to(cr, node->x + node->w, node->y + node->h);
+    cairo_line_to(cr, node->x, node->y + node->h);
+    cairo_close_path(cr);
+    cairo_new_sub_path(cr);
+    cairo_move_to(cr, 0, 0);
+    cairo_line_to(cr, 0, node->node.height);
+    cairo_line_to(cr, node->node.width, node->node.height);
+    cairo_line_to(cr, node->node.width, 0);
+    cairo_close_path(cr);
+    cairo_clip(cr);
+
+    node->source->render(cr, node->source);
+
+    cairo_restore(cr);
+}
+
+static struct JkpdfPastaNode *
+jkpdf_pasta_create_delete_node(struct JkpdfPastaNode *source, double x, double y, double w, double h)
+{
+    struct JkpdfPastaDeleteNode *node = g_new0(struct JkpdfPastaDeleteNode, 1);
+    node->node.render = jkpdf_pasta_delete_node_render_func;
+    node->node.width = source->width;
+    node->node.height = source->height;
+    node->x = x;
+    node->y = y;
+    node->w = w;
+    node->h = h;
+    node->source = source;
+
+    return &node->node;
+}
+
+static void
+jkpdf_pasta_copy_node_render_func(cairo_t *cr, struct JkpdfPastaNode *closure)
+{
+    struct JkpdfPastaCopyNode *node = (struct JkpdfPastaCopyNode *)closure;
+
+    cairo_save(cr);
+    cairo_translate(cr, -node->x, -node->y);
+    cairo_rectangle(cr, node->x, node->y, node->node.width, node->node.height);
+    cairo_clip(cr);
+    node->source->render(cr, node->source);
+    cairo_restore(cr);
+}
+
+static struct JkpdfPastaNode *
+jkpdf_pasta_create_copy_node(struct JkpdfPastaNode *source, double x, double y, double w, double h)
+{
+    struct JkpdfPastaCopyNode *node = g_new0(struct JkpdfPastaCopyNode, 1);
+    node->node.render = jkpdf_pasta_copy_node_render_func;
+    node->node.width = w;
+    node->node.height = h;
+    node->x = x;
+    node->y = y;
+    node->source = source;
+
+    return &node->node;
+}
+
+static void
+jkpdf_pasta_paste_node_render_func(cairo_t *cr, struct JkpdfPastaNode *closure)
+{
+    struct JkpdfPastaPasteNode *node = (struct JkpdfPastaPasteNode *)closure;
+
+    node->source->render(cr, node->source);
+
+    cairo_save(cr);
+    cairo_translate(cr, node->x, node->y);
+    node->clipboard->render(cr, node->clipboard);
+    cairo_restore(cr);
+}
+
+static struct JkpdfPastaNode *
+jkpdf_pasta_create_paste_node(struct JkpdfPastaNode *source, struct JkpdfPastaNode *clipboard, double x, double y)
+{
+    struct JkpdfPastaPasteNode *node = g_new0(struct JkpdfPastaPasteNode, 1);
+    node->node.render = jkpdf_pasta_paste_node_render_func;
+    node->node.width = source->width;
+    node->node.height = source->height;
+    node->source = source;
+    node->clipboard = clipboard;
+    node->x = x;
+    node->y = y;
+
+    return &node->node;
+}
+
+// command line spec parsing
 
 enum JkpdfCopyPasteSpecType {
     JKPDF_CPS_TYPE_CUT,
@@ -152,22 +320,6 @@ jkpdf_parse_copy_paste_spec(const char *spec, enum JkpdfCopyPasteSpecType *type,
     }
 }
 
-static inline void
-jkpdf_render_poppler_page_via_recording_surface(cairo_t *cr, PopplerPage *p)
-{
-    cairo_save(cr);
-
-    g_autoptr(JKPdfCairoSurfaceT) rs = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, NULL);
-    g_autoptr(JKPdfCairoT) crrs = cairo_create(rs);
-
-    poppler_page_render_for_printing(p, crrs);
-
-    cairo_set_source_surface(cr, rs, 0.0, 0.0);
-    cairo_paint(cr);
-
-    cairo_restore(cr);
-}
-
 int main(int argc, char **argv)
 {
     g_autoptr(GError) error = NULL;
@@ -183,7 +335,13 @@ int main(int argc, char **argv)
     g_autoptr(GOptionContext) context = g_option_context_new("SPEC... <INPUT >OUTPUT");
     g_option_context_add_main_entries(context, option_entries, NULL);
 
-    g_option_context_set_description(context, "Copy and paste in PDF files (EXPERIMENTAL)");
+    g_option_context_set_description(context, "Copy and paste in PDF files (EXPERIMENTAL)\n"
+        "\n"
+        "Copy/Paste specs have the following form:\n"
+        "   cut:    x,PAGENO,X,Y,WIDTH,HEIGHT\n"
+        "   copy:   c,PAGENO,X,Y,WIDTH,HEIGHT\n"
+        "   paste:  v,PAGENO,X,Y\n"
+    );
 
     if (!g_option_context_parse(context, &argc, &argv, &error)) {
         fprintf(stderr, "ERROR: option parsing failed: %s\n", error->message);
@@ -199,8 +357,14 @@ int main(int argc, char **argv)
     g_autoptr(JKPdfCairoSurfaceT) surf = jkpdf_create_surface_for_stdout();
     g_autoptr(JKPdfPopplerDocument) main_doc = jkpdf_create_poppler_document_for_stdin();
 
-    g_autoptr(GArray) specarr = g_array_new(FALSE, TRUE, sizeof(struct JkpdfPasteSpec));
-    struct JkpdfPasteSpec last = {0};
+    // FIXME! memory handling, we currently just leak the render node stuff
+    int npages = poppler_document_get_n_pages(main_doc);
+    struct JkpdfPastaNode **pageNodes = g_new0(struct JkpdfPastaNode *, npages);
+    struct JkpdfPastaNode *clipboard = jkpdf_pasta_create_null_node();
+    for (int i = 0; i < npages; ++i) {
+        pageNodes[i] = jkpdf_pasta_create_source_node(poppler_document_get_page(main_doc, i));
+    }
+
     for (unsigned i = 0; i < g_strv_length(arg_commands); ++i) {
         int p = 0;
         double x = 0, y = 0, w = 0, h = 0;
@@ -211,132 +375,34 @@ int main(int argc, char **argv)
             return  1;
         }
 
+        // FIXME! validate p, segfault danger!
+        x = x / arg_dpi * 72.0;
+        y = y / arg_dpi * 72.0;
+        w = w / arg_dpi * 72.0;
+        h = h / arg_dpi * 72.0;
+
         if (type == JKPDF_CPS_TYPE_CUT) {
-            last.x = x / arg_dpi * 72.0;
-            last.y = y / arg_dpi * 72.0;
-            last.w = w / arg_dpi * 72.0;
-            last.h = h / arg_dpi * 72.0;
-            last.sourcePage = -1;
-            last.sourceX = 0;
-            last.sourceY = 0;
-            last.targetPage = p;
-            g_array_append_val(specarr, last);
-
-            last.sourceX = last.x;
-            last.sourceY = last.y;
-            last.sourcePage = last.targetPage;
+            clipboard = jkpdf_pasta_create_copy_node(pageNodes[p-1], x, y, w, h);
+            pageNodes[p-1] = jkpdf_pasta_create_delete_node(pageNodes[p-1], x, y, w, h);
         } else if (type == JKPDF_CPS_TYPE_COPY) {
-            last.sourceX = x / arg_dpi * 72.0;
-            last.sourceY = y / arg_dpi * 72.0;
-            last.sourcePage = p;
-            last.w = w / arg_dpi * 72.0;
-            last.h = h / arg_dpi * 72.0;
-        } else if (type == JKPDF_CPS_TYPE_PASTE || type == JKPDF_CPS_TYPE_PASTE_INTO_CUT) {
-            last.x = x / arg_dpi * 72.0;
-            last.y = y / arg_dpi * 72.0;
-            last.targetPage = p;
-
-            if (last.sourcePage <= 0) {
-                fprintf(stderr, "ERROR: paste before cut or copy\n");
-                return 1;
-            }
-
-
-            if (type == JKPDF_CPS_TYPE_PASTE_INTO_CUT) {
-                struct JkpdfPasteSpec t = last;
-                t.sourcePage = -2;
-                t.sourceX = 0;
-                t.sourceY = 0;
-
-                g_array_append_val(specarr, t);
-            }
-
-            g_array_append_val(specarr, last);
+            clipboard = jkpdf_pasta_create_copy_node(pageNodes[p-1], x, y, w, h);
+        } else if (type == JKPDF_CPS_TYPE_PASTE) {
+            pageNodes[p-1] = jkpdf_pasta_create_paste_node(pageNodes[p-1], clipboard, x, y);
+        } else if (type == JKPDF_CPS_TYPE_PASTE_INTO_CUT) {
+            pageNodes[p-1] = jkpdf_pasta_create_delete_node(pageNodes[p-1], x, y, clipboard->width, clipboard->height);
+            pageNodes[p-1] = jkpdf_pasta_create_paste_node(pageNodes[p-1], clipboard, x, y);
         }
     }
 
     g_autoptr(JKPdfCairoT) cr = cairo_create(surf);
-
-    for (int i = 0; i < poppler_document_get_n_pages(main_doc); ++i) {
-        g_autoptr(JKPdfPopplerPage) page = poppler_document_get_page(main_doc, i);
-
-        double w, h;
-        poppler_page_get_size(page, &w, &h);
-
-        cairo_pdf_surface_set_size(surf, w, h);
+    for (int i = 0; i < npages; ++i) {
+        cairo_pdf_surface_set_size(surf, pageNodes[i]->width, pageNodes[i]->height);
 
         cairo_save(cr);
-        cairo_rectangle(cr, 0, 0, w, h);
+        cairo_rectangle(cr, 0, 0, pageNodes[i]->width, pageNodes[i]->height);
         cairo_clip(cr);
 
-        for (int j = (int)specarr->len - 1; j >= 0; --j) {
-            struct JkpdfPasteSpec *ps = &g_array_index(specarr, struct JkpdfPasteSpec, j);
-
-            if (ps->targetPage != i + 1)
-                continue;
-
-            if (ps->sourcePage == -2) {
-                cairo_new_path(cr);
-                cairo_new_sub_path(cr);
-                cairo_move_to(cr, ps->x, ps->y);
-                cairo_line_to(cr, ps->x + ps->w, ps->y);
-                cairo_line_to(cr, ps->x + ps->w, ps->y + ps->h);
-                cairo_line_to(cr, ps->x, ps->y + ps->h);
-                cairo_close_path(cr);
-                cairo_new_sub_path(cr);
-                cairo_move_to(cr, 0, 0);
-                cairo_line_to(cr, 0, h);
-                cairo_line_to(cr, w, h);
-                cairo_line_to(cr, w, 0);
-                cairo_close_path(cr);
-
-                cairo_clip(cr);
-            }
-
-            if (ps->sourcePage > 0) {
-                g_autoptr(JKPdfPopplerPage) page2 = poppler_document_get_page(main_doc, ps->sourcePage - 1);
-
-                cairo_save(cr);
-
-                cairo_translate(cr, ps->x - ps->sourceX, ps->y - ps->sourceY);
-                cairo_rectangle(cr, ps->sourceX, ps->sourceY, ps->w, ps->h);
-                cairo_clip(cr);
-
-                cairo_set_operator(cr, CAIRO_OPERATOR_DEST_OVER);
-                jkpdf_render_poppler_page_via_recording_surface(cr, page2);
-
-                cairo_restore(cr);
-            }
-        }
-
-        cairo_save(cr);
-
-        for (unsigned j = 0; j < specarr->len; ++j) {
-            struct JkpdfPasteSpec *ps = &g_array_index(specarr, struct JkpdfPasteSpec, j);
-
-            if (ps->sourcePage < 0 && ps->targetPage == i + 1) {
-                cairo_new_path(cr);
-                cairo_new_sub_path(cr);
-                cairo_move_to(cr, ps->x, ps->y);
-                cairo_line_to(cr, ps->x + ps->w, ps->y);
-                cairo_line_to(cr, ps->x + ps->w, ps->y + ps->h);
-                cairo_line_to(cr, ps->x, ps->y + ps->h);
-                cairo_close_path(cr);
-                cairo_new_sub_path(cr);
-                cairo_move_to(cr, 0, 0);
-                cairo_line_to(cr, 0, h);
-                cairo_line_to(cr, w, h);
-                cairo_line_to(cr, w, 0);
-                cairo_close_path(cr);
-
-                cairo_clip(cr);
-            }
-        }
-
-        cairo_set_operator(cr, CAIRO_OPERATOR_DEST_OVER);
-        jkpdf_render_poppler_page_via_recording_surface(cr, page);
-
-        cairo_restore(cr);
+        pageNodes[i]->render(cr, pageNodes[i]);
 
         cairo_restore(cr);
         cairo_surface_show_page(surf);
