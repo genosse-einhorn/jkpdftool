@@ -1,4 +1,4 @@
-// Copyright © 2018 Jonas Kümmerlin <jonas@kuemmerlin.eu>
+// Copyright © 2018-2021 Jonas Kümmerlin <jonas@kuemmerlin.eu>
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -333,15 +333,10 @@ main(int argc, char **argv)
         if (arg_no_bottom)
             bounds.bottom = 0;
 
-        cairo_rectangle_t source = { bounds.left, bounds.top,
-            pagewidth - bounds.left - bounds.right, pageheight - bounds.top - bounds.bottom };
-        cairo_rectangle_t target = { 0.0, 0.0, round(source.width), round(source.height) };
-        cairo_matrix_t t = jkpdf_transform_rect_into_bounds(source, target);
-
         cairo_save(cr);
 
-        cairo_pdf_surface_set_size(surf, target.width, target.height);
-        cairo_transform(cr, &t);
+        cairo_pdf_surface_set_size(surf, pagewidth - bounds.left - bounds.right, pageheight - bounds.top - bounds.bottom);
+        cairo_translate(cr, -bounds.left, -bounds.top);
 
         poppler_page_render_for_printing(page, cr);
 
