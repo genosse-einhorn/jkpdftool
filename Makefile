@@ -9,7 +9,7 @@ CFLAGS_PKG     != $(PKGCONFIG) --cflags $(PKGS)
 LIBS           := -lm
 LIBS_PKG       != $(PKGCONFIG) --libs $(PKGS)
 
-EXE            := out/jkpdftool-pagefit out/jkpdftool-rotate out/jkpdftool-nup out/jkpdftool-splice out/jkpdftool-crop out/jkpdftool-ndown out/jkpdftool-overlay out/jkpdftool-rasterize out/jkpdftool-reencode out/jkpdftool-pasta
+EXE            := out/jkpdftool-pagefit out/jkpdftool-rotate out/jkpdftool-nup out/jkpdftool-splice out/jkpdftool-crop out/jkpdftool-ndown out/jkpdftool-overlay out/jkpdftool-rasterize out/jkpdftool-reencode out/jkpdftool-pasta out/jkpdftool-splice-qpdf
 
 all: $(EXE)
 
@@ -18,6 +18,11 @@ out/%: %.c $(wildcard *.h) Makefile
 	$(CC) -std=c11 $(CFLAGS) $(CFLAGS_PKG) -o $@ $< $(LIBS) $(LIBS_PKG)
 
 out/jkpdftool-reencode: jkpdftool-reencode.sh Makefile
+	@mkdir -p out
+	cp $< $@
+	chmod u+x $@
+
+out/jkpdftool-splice-qpdf: jkpdftool-splice-qpdf.sh Makefile
 	@mkdir -p out
 	cp $< $@
 	chmod u+x $@
