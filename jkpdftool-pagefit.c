@@ -30,11 +30,15 @@ main(int argc, char **argv)
     g_autofree gchar *arg_size = NULL;
     g_autofree gchar *arg_orientation = NULL;
     g_autofree gchar *arg_margin = NULL;
+    g_autofree gchar *arg_halign = NULL;
+    g_autofree gchar *arg_valign = NULL;
 
     GOptionEntry option_entries[] = {
         { "size",        's', 0, G_OPTION_ARG_STRING, &arg_size, "Page size", "WIDTHxHEIGHT" },
         { "orientation", 'o', 0, G_OPTION_ARG_STRING, &arg_orientation, "Orientation (landscape or portrait)", "ORIENTATION" },
         { "margin",      'm', 0, G_OPTION_ARG_STRING, &arg_margin, "Additional margin", "MARGIN" },
+        { "halign",      0,   0, G_OPTION_ARG_STRING, &arg_halign, "Horizontal Alignment", "left|center|right" },
+        { "valign",      0,   0, G_OPTION_ARG_STRING, &arg_valign, "Vertical Alignment", "top|center|bottom" },
         { NULL }
     };
 
@@ -97,6 +101,34 @@ main(int argc, char **argv)
         return 1;
     }
 
+    JkPdfAlignment halign = JKPDF_ALIGN_CENTER;
+    JkPdfAlignment valign = JKPDF_ALIGN_CENTER;
+    if (arg_halign != NULL) {
+        if (!g_ascii_strcasecmp(arg_halign, "left")) {
+            halign = JKPDF_ALIGN_START;
+        } else if (!g_ascii_strcasecmp(arg_halign, "center")) {
+            halign = JKPDF_ALIGN_CENTER;
+        } else if (!g_ascii_strcasecmp(arg_halign, "right")) {
+            halign = JKPDF_ALIGN_END;
+        } else {
+            fprintf(stderr, "ERROR: invalid horizontal alignment '%s', must be one of left, center or right\n", arg_halign);
+            return 1;
+        }
+    }
+
+    if (arg_valign != NULL) {
+        if (!g_ascii_strcasecmp(arg_valign, "top")) {
+            valign = JKPDF_ALIGN_START;
+        } else if (!g_ascii_strcasecmp(arg_valign, "center")) {
+            valign = JKPDF_ALIGN_CENTER;
+        } else if (!g_ascii_strcasecmp(arg_valign, "bottom")) {
+            valign = JKPDF_ALIGN_END;
+        } else {
+            fprintf(stderr, "ERROR: invalid vertical alignment '%s', must be one of top, center or bottom\n", arg_valign);
+            return 1;
+        }
+    }
+
     g_autoptr(JKPdfPopplerDocument) doc = jkpdf_create_poppler_document_for_stdin();
     g_autoptr(JKPdfCairoSurfaceT) surf = jkpdf_create_surface_for_stdout();
 
@@ -142,7 +174,7 @@ main(int argc, char **argv)
         page_r.width -= margins[3] + margins[1];
         page_r.height -= margins[0] + margins[2];
 
-        cairo_matrix_t m = jkpdf_transform_rect_into_bounds(source_r, page_r);
+        cairo_matrix_t m = jkpdf_transform_rect_into_bounds_with_alignment(source_r, page_r, halign, valign);
         cairo_transform(cr, &m);
         poppler_page_render_for_printing(page, cr);
 

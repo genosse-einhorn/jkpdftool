@@ -17,8 +17,14 @@
 #include <cairo.h>
 #include <math.h>
 
+typedef enum {
+    JKPDF_ALIGN_START,
+    JKPDF_ALIGN_CENTER,
+    JKPDF_ALIGN_END
+} JkPdfAlignment;
+
 static inline cairo_matrix_t
-jkpdf_transform_rect_into_bounds(const cairo_rectangle_t source, const cairo_rectangle_t dest)
+jkpdf_transform_rect_into_bounds_with_alignment(const cairo_rectangle_t source, const cairo_rectangle_t dest, JkPdfAlignment halign, JkPdfAlignment valign)
 {
     double scale_x = dest.width / source.width;
     double scale_y = dest.height / source.height;
@@ -29,10 +35,32 @@ jkpdf_transform_rect_into_bounds(const cairo_rectangle_t source, const cairo_rec
 
     cairo_matrix_t m;
     cairo_matrix_init_identity(&m);
-    cairo_matrix_translate(&m, dest.x + (dest.width - scaled_width) / 2, dest.y + (dest.height - scaled_height) / 2);
+
+    double tx = 0;
+    double ty = 0;
+
+    if (halign == JKPDF_ALIGN_CENTER) {
+        tx = (dest.width - scaled_width) / 2;
+    } else if (halign == JKPDF_ALIGN_END) {
+        tx = dest.width - scaled_width;
+    }
+
+    if (valign == JKPDF_ALIGN_CENTER) {
+        ty = (dest.height - scaled_height) / 2;
+    } else if(valign == JKPDF_ALIGN_END) {
+        ty = dest.height - scaled_height;
+    }
+
+    cairo_matrix_translate(&m, dest.x + tx, dest.y + ty);
     cairo_matrix_scale(&m, scale, scale);
     cairo_matrix_translate(&m, -source.x, -source.y);
     return m;
+}
+
+static inline cairo_matrix_t
+jkpdf_transform_rect_into_bounds(const cairo_rectangle_t source, const cairo_rectangle_t dest)
+{
+    return jkpdf_transform_rect_into_bounds_with_alignment(source, dest, JKPDF_ALIGN_CENTER, JKPDF_ALIGN_CENTER);
 }
 
 static inline cairo_rectangle_t
