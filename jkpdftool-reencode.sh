@@ -1,6 +1,6 @@
 #!/bin/sh
 
-if [ "$#" -gt 0 ]; then
+if [ "$1" = "-?" ] || [ "$1" = "--help" ]; then
     (
     printf 'Usage:\n'
     printf '  %s <INPUT-PDF >OUTPUT-PDF\n' "$(basename "$0")"
@@ -28,4 +28,4 @@ if ! command -v gs >/dev/null 2>&1; then
     exit 1
 fi
 
-exec gs -sDEVICE=pdfwrite -q -o - -
+exec gs -sDEVICE=pdfwrite "$@" -q -o - -
