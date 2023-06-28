@@ -67,11 +67,11 @@ int main(int argc, char **argv)
 
     GOptionEntry option_entries[] = {
         { "offset", 'o', 0, G_OPTION_ARG_STRING, &arg_offset, "Offset", "X,Y" },
-        { G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_FILENAME_ARRAY, &arg_overlays, "Overlay files", "FILENAME..." },
+        { G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_FILENAME_ARRAY, &arg_overlays, "Overlay files", "OVERLAY.PDF..." },
         { NULL }
     };
 
-    g_autoptr(GOptionContext) context = g_option_context_new("OVERLAY... <INPUT >OUTPUT");
+    g_autoptr(GOptionContext) context = g_option_context_new("<BASE.PDF >OUTPUT.PDF");
     g_option_context_add_main_entries(context, option_entries, NULL);
 
     g_option_context_set_description(context, "Overlay PDF files onto another");
