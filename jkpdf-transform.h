@@ -23,18 +23,24 @@ typedef enum {
     JKPDF_ALIGN_END
 } JkPdfAlignment;
 
+#define JKPDF_SCALE_FIT        -1.0
+#define JKPDF_SCALE_COVER      -2.0
+#define JKPDF_SCALE_INVALID     0.0
+
 static inline cairo_matrix_t
-jkpdf_transform_rect_into_bounds_with_alignment(const cairo_rectangle_t source, const cairo_rectangle_t dest, JkPdfAlignment halign, JkPdfAlignment valign)
+jkpdf_transform_rect_into_bounds_3(const cairo_rectangle_t source, const cairo_rectangle_t dest, JkPdfAlignment halign, JkPdfAlignment valign, double scale)
 {
-    double scale_x = dest.width / source.width;
-    double scale_y = dest.height / source.height;
-    double scale = scale_x < scale_y ? scale_x : scale_y;
+    cairo_matrix_t m;
+    cairo_matrix_init_identity(&m);
+
+    if (scale == JKPDF_SCALE_FIT)
+        scale = MIN(dest.width / source.width, dest.height / source.height);
+
+    if (scale == JKPDF_SCALE_COVER)
+        scale = MAX(dest.width / source.width, dest.height / source.height);
 
     double scaled_width = source.width * scale;
     double scaled_height = source.height * scale;
-
-    cairo_matrix_t m;
-    cairo_matrix_init_identity(&m);
 
     double tx = 0;
     double ty = 0;
@@ -55,6 +61,12 @@ jkpdf_transform_rect_into_bounds_with_alignment(const cairo_rectangle_t source, 
     cairo_matrix_scale(&m, scale, scale);
     cairo_matrix_translate(&m, -source.x, -source.y);
     return m;
+}
+
+static inline cairo_matrix_t
+jkpdf_transform_rect_into_bounds_with_alignment(const cairo_rectangle_t source, const cairo_rectangle_t dest, JkPdfAlignment halign, JkPdfAlignment valign)
+{
+    return jkpdf_transform_rect_into_bounds_3(source, dest, halign, valign, JKPDF_SCALE_FIT);
 }
 
 static inline cairo_matrix_t

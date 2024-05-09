@@ -32,6 +32,7 @@ main(int argc, char **argv)
     g_autofree gchar *arg_margin = NULL;
     g_autofree gchar *arg_halign = NULL;
     g_autofree gchar *arg_valign = NULL;
+    g_autofree gchar *arg_scale = NULL;
 
     GOptionEntry option_entries[] = {
         { "size",        's', 0, G_OPTION_ARG_STRING, &arg_size, "Page size", "WIDTHxHEIGHT" },
@@ -39,6 +40,7 @@ main(int argc, char **argv)
         { "margin",      'm', 0, G_OPTION_ARG_STRING, &arg_margin, "Additional margin", "MARGIN" },
         { "halign",      0,   0, G_OPTION_ARG_STRING, &arg_halign, "Horizontal Alignment", "left|center|right" },
         { "valign",      0,   0, G_OPTION_ARG_STRING, &arg_valign, "Vertical Alignment", "top|center|bottom" },
+        { "scale",       0,   0, G_OPTION_ARG_STRING, &arg_scale, "Scaling", "fit|cover|NUMBER" },
         { NULL }
     };
 
@@ -54,7 +56,7 @@ main(int argc, char **argv)
         "Page size:\n"
         "  Use the --size option to set the paper size. Fixed sizes A3, A4, A5 are\n"
         "  supported, as well as custom page sizes WIDTHxHEIGHT. Width and height\n"
-        "  can be specified in millimeters (mm) or points (pt, the default).\n"
+        "  can be specified in centimeters (cm), millimeters (mm) or points (pt).\n"
         "  If you don't specify a page size, the size of the source page is used.\n"
         "\n"
         "Page orientation:\n"
@@ -68,7 +70,19 @@ main(int argc, char **argv)
         "    --margin=VERTICAL,HORIZONTAL\n"
         "    --margin=TOP,HORIZONTAL,BOTTOM\n"
         "    --margin=TOP,RIGHT,BOTTOM,LEFT\n"
-        "  Margins can be specified in millimeters (mm) or points (pt, the default).\n"
+        "  Margins can be specified in centimeters (cm), millimeters (mm) or\n"
+        "  points (pt, the default).\n"
+        "\n"
+        "Scaling:\n"
+        "  The --scale option allows you to control how the page content is scaled.\n"
+        "  By default, the content is scaled to fit into the page and the new margins.\n"
+        "  You can also choose to scale the content to cover the whole page (possibly\n"
+        "  cutting off the borders) or set a custom scale factor.\n"
+        "\n"
+        "Alignment:\n"
+        "  You can choose where to place the scaled content on the page using the\n"
+        "  --halign and --valign options. By default, the content is centered.\n"
+        "\n"
     );
 
     if (!g_option_context_parse(context, &argc, &argv, &error)) {
@@ -104,11 +118,12 @@ main(int argc, char **argv)
     JkPdfAlignment halign = JKPDF_ALIGN_CENTER;
     JkPdfAlignment valign = JKPDF_ALIGN_CENTER;
     if (arg_halign != NULL) {
-        if (!g_ascii_strcasecmp(arg_halign, "left")) {
+        size_t l = strlen(arg_halign);
+        if (!g_ascii_strncasecmp(arg_halign, "left", l)) {
             halign = JKPDF_ALIGN_START;
-        } else if (!g_ascii_strcasecmp(arg_halign, "center")) {
+        } else if (!g_ascii_strncasecmp(arg_halign, "center", l)) {
             halign = JKPDF_ALIGN_CENTER;
-        } else if (!g_ascii_strcasecmp(arg_halign, "right")) {
+        } else if (!g_ascii_strncasecmp(arg_halign, "right", l)) {
             halign = JKPDF_ALIGN_END;
         } else {
             fprintf(stderr, "ERROR: invalid horizontal alignment '%s', must be one of left, center or right\n", arg_halign);
@@ -117,14 +132,24 @@ main(int argc, char **argv)
     }
 
     if (arg_valign != NULL) {
-        if (!g_ascii_strcasecmp(arg_valign, "top")) {
+        size_t l = strlen(arg_valign);
+        if (!g_ascii_strncasecmp(arg_valign, "top", l)) {
             valign = JKPDF_ALIGN_START;
-        } else if (!g_ascii_strcasecmp(arg_valign, "center")) {
+        } else if (!g_ascii_strncasecmp(arg_valign, "center", l)) {
             valign = JKPDF_ALIGN_CENTER;
-        } else if (!g_ascii_strcasecmp(arg_valign, "bottom")) {
+        } else if (!g_ascii_strncasecmp(arg_valign, "bottom", l)) {
             valign = JKPDF_ALIGN_END;
         } else {
             fprintf(stderr, "ERROR: invalid vertical alignment '%s', must be one of top, center or bottom\n", arg_valign);
+            return 1;
+        }
+    }
+
+    double scale = JKPDF_SCALE_FIT;
+    if (arg_scale) {
+        scale = jkpdf_parse_scale(arg_scale, &error);
+        if (scale == JKPDF_SCALE_INVALID) {
+            fprintf(stderr, "ERROR: invalid scale specification '%s': %s\n", arg_scale, error->message);
             return 1;
         }
     }
@@ -174,7 +199,7 @@ main(int argc, char **argv)
         page_r.width -= margins[3] + margins[1];
         page_r.height -= margins[0] + margins[2];
 
-        cairo_matrix_t m = jkpdf_transform_rect_into_bounds_with_alignment(source_r, page_r, halign, valign);
+        cairo_matrix_t m = jkpdf_transform_rect_into_bounds_3(source_r, page_r, halign, valign, scale);
         cairo_transform(cr, &m);
         poppler_page_render_for_printing(page, cr);
 

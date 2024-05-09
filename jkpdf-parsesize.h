@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include "jkpdf-transform.h"
+
 #include <glib.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -220,6 +222,34 @@ jkpdf_parse_orientation(const char *orientation)
         return JKPDF_ORIENTATION_PORTRAIT;
 
     return JKPDF_ORIENTATION_INVALID;
+}
+
+static inline double
+jkpdf_parse_scale(const char *spec, GError **error)
+{
+    size_t len = strlen(spec);
+    if (!g_ascii_strncasecmp("fit", spec, len))
+        return JKPDF_SCALE_FIT;
+
+    if (!g_ascii_strncasecmp("cover", spec, len))
+        return JKPDF_SCALE_COVER;
+
+    double scale = JKPDF_SCALE_INVALID;
+    size_t s = jkpdf_parse_floatval(spec, 0, &scale, error);
+    if (s == 0)
+        return JKPDF_SCALE_INVALID;
+
+    if (spec[s] != 0) {
+        jkpdf_set_unexpected_char_error(error, JKPDF_SIZE_ERROR, JKPDF_SIZE_ERROR_PARSEFAIL, spec[s], s);
+        return JKPDF_SCALE_INVALID;
+    }
+
+    if (scale <= 0.0) {
+        g_set_error(error, JKPDF_SIZE_ERROR, JKPDF_SIZE_ERROR_OUTOFRANGE, "Scale must be greater than zero");
+        return JKPDF_SCALE_INVALID;
+    }
+
+    return scale;
 }
 
 static inline bool
