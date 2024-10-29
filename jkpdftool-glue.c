@@ -18,27 +18,42 @@
 #include "jkpdf-parsesize.h"
 #include "jkpdf-transform.h"
 
-static void
-print_help(const char *argv0)
-{
-    printf("Usage:\n");
-    printf(" %s <INPUT-PDF  >OUTPUT-PDF\n", argv0);
-    printf("\n");
-    printf("Transform the PDF file read from stdin to a single page written to stdout.\n");
-    printf("\n");
-    printf("All pages of the input pdf will be concatenated into one big output page.\n");
-}
 
 int
 main(int argc, char **argv)
 {
-    if (argc >= 2 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-?"))) {
-        print_help(argv[0]);
-        return 0;
+    g_autofree gchar *arg_margin = NULL;
+
+    GOptionEntry option_entries[] = {
+        { "margin",      'm', 0, G_OPTION_ARG_STRING, &arg_margin, "space between glued pages", "MARGIN" },
+        { NULL }
+    };
+
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GOptionContext) context = g_option_context_new("<INPUT >OUTPUT");
+    g_option_context_add_main_entries(context, option_entries, NULL);
+
+    g_option_context_set_description(context, "Glue pages together onto a single page.\n"
+        "\n"
+        "The PDF file is read from standard input, and the transformed PDF file is\n"
+        "written onto the standard output.\n"
+        "\n"
+        "\n"
+    );
+
+    if (!g_option_context_parse(context, &argc, &argv, &error)) {
+        fprintf(stderr, "ERROR: option parsing failed: %s\n", error->message);
+        return 1;
     }
 
     if (argc > 1) {
-        fprintf(stderr, "ERROR: expected no arguments, see '%s --help'\n", argv[0]);
+        fprintf(stderr, "ERROR: unexpected positional argument '%s'\n", argv[1]);
+        return 1;
+    }
+
+    double margin = 0.0;
+    if (arg_margin && !jkpdf_parse_single_length(arg_margin, &margin, &error)) {
+        fprintf(stderr, "ERROR: invalid --margin '%s': %s\n", arg_margin, error->message);
         return 1;
     }
 
@@ -50,7 +65,7 @@ main(int argc, char **argv)
 
     int n_pages = poppler_document_get_n_pages(doc);
 
-    double output_w = 1.0, output_h = 1.0;
+    double output_w = 1.0, output_h = -margin;
 
     for (int i = 0; i < n_pages; ++i) {
         g_autoptr(JKPdfPopplerPage) p = poppler_document_get_page(doc, i);
@@ -58,7 +73,7 @@ main(int argc, char **argv)
         poppler_page_get_size(p, &page_w, &page_h);
 
         output_w = output_w < page_w ? page_w : output_w;
-        output_h += page_h;
+        output_h += page_h + margin;
     }
 
     cairo_pdf_surface_set_size(surf, output_w, output_h);
@@ -78,7 +93,7 @@ main(int argc, char **argv)
 
         cairo_restore(cr);
 
-        y += page_h;
+        y += page_h + margin;
     }
 
     cairo_surface_show_page(surf);
