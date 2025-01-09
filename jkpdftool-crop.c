@@ -224,6 +224,8 @@ main(int argc, char **argv)
     gboolean arg_no_right = FALSE;
     g_autofree gchar *arg_margin = NULL;
     int arg_color_fuzz = 0;
+    g_autofree gchar *arg_target_w = NULL;
+    g_autofree gchar *arg_target_h = NULL;
 
     GOptionEntry option_entries[] = {
         { "background-color", 'c', 0, G_OPTION_ARG_STRING, &arg_bgcolor,    "Background color to crop (default: white)", "RRGGBB" },
@@ -236,6 +238,8 @@ main(int argc, char **argv)
         { "no-right",         0,   0, G_OPTION_ARG_NONE,   &arg_no_right,   "Do not crop the right side", NULL },
         { "margin",           'm', 0, G_OPTION_ARG_STRING, &arg_margin,     "Margin to leave around detected content", "MARGIN" },
         { "fuzz",             'f', 0, G_OPTION_ARG_INT,    &arg_color_fuzz, "Allowed color variation (default: 0)", "0-255" },
+        { "target-width",     'w', 0, G_OPTION_ARG_STRING, &arg_target_w,   "Scale result to target width", "WIDTH" },
+        { "target-height",    'h', 0, G_OPTION_ARG_STRING, &arg_target_h,   "Scale result to target height", "HEIGHT" },
         { NULL }
     };
 
@@ -297,6 +301,28 @@ main(int argc, char **argv)
         return 1;
     }
 
+    double target_w = 0.0;
+    if (arg_target_w && !jkpdf_parse_single_length(arg_target_w, &target_w, &error)) {
+        fprintf(stderr, "ERROR: invalid target width '%s': %s\n", arg_target_w, error->message);
+        return 1;
+    }
+
+    double target_h = 0.0;
+    if (arg_target_h && !jkpdf_parse_single_length(arg_target_h, &target_h, &error)) {
+        fprintf(stderr, "ERROR: invalid target width '%s': %s\n", arg_target_h, error->message);
+        return 1;
+    }
+
+    if ((target_w > 0.0) && (margins[1] + margins[3] >= target_w)) {
+        fprintf(stderr, "ERROR: margins greater than target width\n");
+        return 1;
+    }
+
+    if ((target_h > 0.0) && (margins[0] + margins[2] >= target_h)) {
+        fprintf(stderr, "ERROR: margins greater than target height\n");
+        return 1;
+    }
+
     g_autoptr(JKPdfPopplerDocument) doc = jkpdf_create_poppler_document_for_stdin();
     g_autoptr(JKPdfCairoSurfaceT) surf = jkpdf_create_surface_for_stdout();
 
@@ -319,27 +345,57 @@ main(int argc, char **argv)
             bounds = global_bounds;
         }
 
-        bounds.top    = MAX(0.0, bounds.top - margins[0]);
-        bounds.right  = MAX(0.0, bounds.right - margins[1]);
-        bounds.bottom = MAX(0.0, bounds.bottom - margins[2]);
-        bounds.left   = MAX(0.0, bounds.left - margins[3]);
-
         if (arg_no_left)
-            bounds.left = 0;
+            bounds.left = 0.0;
         if (arg_no_top)
-            bounds.top = 0;
+            bounds.top = 0.0;
         if (arg_no_right)
-            bounds.right = 0;
+            bounds.right = 0.0;
         if (arg_no_bottom)
-            bounds.bottom = 0;
+            bounds.bottom = 0.0;
 
         cairo_save(cr);
 
-        cairo_pdf_surface_set_size(surf, pagewidth - bounds.left - bounds.right, pageheight - bounds.top - bounds.bottom);
-        cairo_translate(cr, -bounds.left, -bounds.top);
+        if (target_w > 0.0 || target_h > 0.0) {
+            // scaled version
+
+            double cropped_w = pagewidth - bounds.left - bounds.right;
+            double cropped_h = pageheight - bounds.top - bounds.bottom;
+            double zoom_w = 0.0;
+            double zoom_h = 0.0;
+            double zoom = 0.0;
+
+            if (target_w > 0.0)
+                zoom_w = (target_w - margins[1] - margins[3]) / cropped_w;
+            if (target_h > 0.0)
+                zoom_h = (target_h - margins[0] - margins[2]) / cropped_h;
+
+            if (zoom_w > 0.0 && zoom_h > 0.0)
+                zoom = MIN(zoom_w, zoom_h);
+            else
+                zoom = MAX(zoom_w, zoom_h);
+
+            double target_page_w = cropped_w * zoom + margins[1] + margins[3];
+            double target_page_h = cropped_h * zoom + margins[0] + margins[2];
+
+            cairo_pdf_surface_set_size(surf, target_page_w, target_page_h);
+            cairo_translate(cr, margins[3], margins[0]);
+            cairo_scale(cr, zoom, zoom);
+            cairo_translate(cr, -bounds.left, -bounds.top);
+        } else {
+            // classic non-scaled version
+
+            bounds.top    = MAX(0.0, bounds.top - margins[0]);
+            bounds.right  = MAX(0.0, bounds.right - margins[1]);
+            bounds.bottom = MAX(0.0, bounds.bottom - margins[2]);
+            bounds.left   = MAX(0.0, bounds.left - margins[3]);
+
+
+            cairo_pdf_surface_set_size(surf, pagewidth - bounds.left - bounds.right, pageheight - bounds.top - bounds.bottom);
+            cairo_translate(cr, -bounds.left, -bounds.top);
+        }
 
         poppler_page_render_for_printing(page, cr);
-
         cairo_restore(cr);
         cairo_surface_show_page(surf);
     }
